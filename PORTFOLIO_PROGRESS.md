@@ -4,12 +4,12 @@ Last updated: 2026-08-16
 
 ## Current milestone
 
-**Phase 1 — trusted rule engine: complete**
+**Phase 2 — SQLite persistence and REST API: complete**
 
-The repository now has a small end-to-end product slice: synthetic inputs,
-data-contract validation, deterministic reconciliation, operational reports,
-tests, and documentation. The next milestone is persistence and a lightweight
-review dashboard, not additional rule complexity.
+The repository now has two working delivery paths around one rule engine: the
+original CSV CLI and a local JSON REST API. API runs receive UUIDs and UTC
+timestamps, and completed metadata/results are stored atomically in SQLite. The
+next milestone is n8n orchestration, not new validation logic.
 
 ## Completed features and evidence
 
@@ -23,7 +23,16 @@ review dashboard, not additional rule complexity.
 | Human-review boundary | Prevent automation from guessing about ambiguous records | `requires_review` versus `is_exception` in outputs | Human-in-the-loop workflow design |
 | Three operational reports | Turn validation into actionable provider and exception views | `examples/output/`; end-to-end test | pandas aggregation, KPI definition, reporting |
 | Command-line workflow and logs | Make the batch repeatable and automation-ready | `python -m bh_doc_validator ...` | CLI design, logging, pipeline orchestration |
-| Automated test suite | Prove the rules and output counts are stable | `.venv\Scripts\python.exe -m pytest` → `31 passed` | pytest, unit testing, integration testing |
+| Phase 1 Git restore point | Preserve the trusted CLI/rule baseline before infrastructure changes | Commit `52751a0` | Git staging, commits, safe incremental delivery |
+| Shared validation service | Keep CSV and API paths on one deterministic implementation | `service.py`; complete regression suite | Application-layer design, separation of concerns |
+| SQLite schema and history | Retain completed batches without a paid service | `persistence.py`; schema/restart tests | SQL, relational modeling, schema versioning |
+| Atomic run persistence | Prevent partially stored run history | forced-failure rollback test | Transactions, integrity, failure handling |
+| UUIDs and UTC timestamps | Give automation stable globally unique run references | service and uniqueness tests | UUIDs, timezone-aware metadata, traceability |
+| Persisted exceptions | Keep actionable rows queryable without duplicate state | `is_exception = 1` query and test | Normalization, derived views, data integrity |
+| Versioned FastAPI endpoints | Make the validator callable by n8n and other tools | `/api/v1/runs`; `docs/api.md` | REST, HTTP methods/statuses, OpenAPI |
+| Typed JSON contract | Validate nested inputs and serialize typed outputs | `api_models.py`; API schema/type tests | JSON, Pydantic, contract-first integration |
+| Sanitized API errors | Return actionable codes without leaking paths/payloads | error handlers and negative tests | Error taxonomy, security boundaries |
+| Automated test suite | Prove rules, CSV, database, and API behavior are stable | `.venv\Scripts\python.exe -m pytest` → `61 passed` | pytest, unit, integration, API, transaction testing |
 | Architecture and setup documentation | Let a recruiter run and evaluate the work | `README.md`, `docs/architecture.md` | Technical communication, system design |
 
 ## Technical concepts learned
@@ -38,42 +47,52 @@ review dashboard, not additional rule complexity.
   maintainable automation project.
 - How configuration should expose stable parameters without becoming an unsafe,
   hard-to-test rules programming language.
+- Why APIs should accept portable JSON data rather than arbitrary server paths.
+- How an application service lets CLI and HTTP adapters reuse one rule engine.
+- Why a database transaction must commit run metadata and results together.
+- Why exceptions can be a filtered result set instead of a duplicate table.
+- How UUIDs differ from database auto-increment IDs in distributed workflows.
+- How HTTP `POST`, `GET`, `201`, `404`, `422`, `500`, and `503` communicate
+  different outcomes to an automation client.
+- Why synchronous pandas/sqlite work should use normal FastAPI `def` handlers.
+- How dependency injection and temporary database files make APIs testable.
 
 ## Remaining phases
 
-### Phase 2 — persistence and dashboard
+### Phase 3 — n8n integration
 
-- Design a small SQLite schema for validation runs and results.
-- Persist each batch transactionally with a run ID and timestamps.
-- Add a lightweight dashboard with KPI cards, filters, and an exception queue.
-- Add tests for database writes and empty states.
-- Capture portfolio screenshots using only synthetic data.
-
-### Phase 3 — API and n8n
-
-- Expose validation through a small REST endpoint using JSON responses.
 - Create an n8n workflow: receive batch → call validator → branch on exceptions →
-  persist results → send a local/demo notification or create a review task.
-- Export the workflow JSON and document retry/error behavior.
+  retrieve persisted exceptions → send a local/demo notification or create a
+  human-review task.
+- Add a workflow execution/idempotency key before enabling HTTP retries so a
+  retry cannot create a duplicate validation run.
+- Exercise webhook concepts only where they improve the workflow.
+- Export the workflow JSON and document success, no-exception, and error paths.
 - Avoid paid APIs during local development.
 
-### Phase 4 — hardening
+### Phase 4 — dashboard, selected AI, and portfolio polish
 
+- Add a lightweight dashboard for run history, filters, and exception review.
 - Add GitHub Actions for tests.
-- Add optional Docker packaging after the local path is stable.
-- Produce a run manifest with counts, rules version, and input checksums.
-- Add larger-volume performance and failure-recovery tests.
-
-### Phase 5 — optional assistive AI
-
-- Evaluate an operations-summary feature using only deterministic output fields.
+- Capture screenshots and improve the end-to-end portfolio narrative.
+- Consider optional Docker packaging only if it simplifies the n8n demo.
+- Evaluate an exception-summary or prioritization feature using only persisted
+  deterministic output fields.
 - Label generated text as a suggestion and preserve source issue codes.
 - Require human review for any prioritization suggestion.
 - Do not let an LLM create or overwrite validation outcomes.
 
 ## Known limitations and open decisions
 
-- The MVP is batch-based and does not retain run history.
+- SQLite is a local single-service database and is not presented as a high-scale
+  production architecture.
+- The API is synchronous and designed for small synthetic batches.
+- The API has no authentication, TLS, rate limiting, or body-size limit and must
+  remain local during this phase.
+- Invalid requests do not create failed-run audit rows; only completed runs are
+  persisted.
+- Raw input payloads are not stored, so a run cannot yet be replayed from SQLite.
+- There is no idempotency key yet; Phase 3 must add one before n8n retries.
 - Duplicate primary IDs fail the run; future ingestion may add a separate reject
   file if partial processing becomes a requirement.
 - Date tolerance is symmetric; a real policy could need separate before/after
@@ -87,7 +106,8 @@ review dashboard, not additional rule complexity.
 
 ## Bugs / issues
 
-No known Phase 1 defects. All 31 tests pass on Python 3.13.14 with pandas 3.0.5.
+No known Phase 1 or Phase 2 defects. All 61 tests pass on Python 3.13.14 with
+pandas 3.0.5, FastAPI 0.141.1, and SQLite 3.50.4.
 
 ## Ideas for future improvement
 
@@ -95,6 +115,9 @@ No known Phase 1 defects. All 31 tests pass on Python 3.13.14 with pandas 3.0.5.
 - Add a separate input-reject report for partial batch acceptance.
 - Add a configuration checksum so a rules-version label cannot drift from its
   actual settings.
+- Add idempotent run creation for automation retries.
+- Consider storing an input checksum without retaining raw inputs.
 - Measure validation time on generated synthetic batches of increasing size.
-- Add a reviewer disposition/audit trail in Phase 2.
+- Add a reviewer disposition/audit trail only when the dashboard workflow is
+  defined.
 - Compare deterministic output snapshots across rules versions.

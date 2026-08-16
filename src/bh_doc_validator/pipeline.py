@@ -8,8 +8,7 @@ from pathlib import Path
 
 from .config import ValidationConfig
 from .io import load_appointments, load_documentation
-from .reporting import build_exceptions_report, build_provider_summary
-from .validation import VALID, validate_records
+from .service import validate_batch
 
 
 LOGGER = logging.getLogger(__name__)
@@ -44,9 +43,7 @@ def run_pipeline(
         len(documentation),
     )
 
-    detailed = validate_records(appointments, documentation, config)
-    provider_summary = build_provider_summary(detailed)
-    exceptions = build_exceptions_report(detailed)
+    batch = validate_batch(appointments, documentation, config)
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -54,17 +51,15 @@ def run_pipeline(
     provider_path = destination / "provider_summary.csv"
     exceptions_path = destination / "exceptions_report.csv"
 
-    detailed.to_csv(detailed_path, index=False)
-    provider_summary.to_csv(provider_path, index=False)
-    exceptions.to_csv(exceptions_path, index=False)
+    batch.detailed.to_csv(detailed_path, index=False)
+    batch.provider_summary.to_csv(provider_path, index=False)
+    batch.exceptions.to_csv(exceptions_path, index=False)
 
-    valid_count = int(detailed["validation_result"].eq(VALID).sum())
-    exception_count = len(exceptions)
     LOGGER.info(
         "Wrote reports to %s (%d valid records, %d exceptions)",
         destination,
-        valid_count,
-        exception_count,
+        batch.valid_count,
+        batch.exception_count,
     )
     return PipelineResult(
         detailed_report=detailed_path,
@@ -72,7 +67,6 @@ def run_pipeline(
         exceptions_report=exceptions_path,
         appointment_count=len(appointments),
         documentation_count=len(documentation),
-        valid_count=valid_count,
-        exception_count=exception_count,
+        valid_count=batch.valid_count,
+        exception_count=batch.exception_count,
     )
-

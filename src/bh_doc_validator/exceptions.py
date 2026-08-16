@@ -12,3 +12,10 @@ class ConfigurationError(ValidatorError):
 class InputDataError(ValidatorError):
     """Raised when an input file violates the documented data contract."""
 
+
+class PersistenceError(ValidatorError):
+    """Raised when run history cannot be safely read or written."""
+
+
+class RunNotFoundError(ValidatorError):
+    """Raised when a requested validation run does not exist."""

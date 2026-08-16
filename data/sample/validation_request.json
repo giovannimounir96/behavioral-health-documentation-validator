@@ -1,0 +1,205 @@
+{
+  "source": "portfolio-sample",
+  "appointments": [
+    {
+      "appointment_id": "APT-5001",
+      "patient_id": "PAT-1001",
+      "provider_id": "PROV-001",
+      "appointment_date": "2026-07-01",
+      "appointment_time": "09:00",
+      "service_type": "Medication Management",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5002",
+      "patient_id": "PAT-1002",
+      "provider_id": "PROV-001",
+      "appointment_date": "2026-07-01",
+      "appointment_time": "10:00",
+      "service_type": "Therapy Follow-up",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5003",
+      "patient_id": "PAT-1003",
+      "provider_id": "PROV-002",
+      "appointment_date": "2026-07-02",
+      "appointment_time": "11:00",
+      "service_type": "Initial Assessment",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5004",
+      "patient_id": "PAT-1004",
+      "provider_id": "PROV-002",
+      "appointment_date": "2026-07-02",
+      "appointment_time": "13:00",
+      "service_type": "Therapy Follow-up",
+      "appointment_status": "Cancelled"
+    },
+    {
+      "appointment_id": "APT-5005",
+      "patient_id": "PAT-1005",
+      "provider_id": "PROV-003",
+      "appointment_date": "2026-07-03",
+      "appointment_time": "09:30",
+      "service_type": "Medication Management",
+      "appointment_status": "No Show"
+    },
+    {
+      "appointment_id": "APT-5006",
+      "patient_id": "PAT-1006",
+      "provider_id": "PROV-003",
+      "appointment_date": "2026-07-03",
+      "appointment_time": "14:00",
+      "service_type": "Therapy Follow-up",
+      "appointment_status": "Rescheduled"
+    },
+    {
+      "appointment_id": "APT-5007",
+      "patient_id": "PAT-1007",
+      "provider_id": "PROV-001",
+      "appointment_date": "2026-07-04",
+      "appointment_time": "10:30",
+      "service_type": "Medication Management",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5008",
+      "patient_id": "PAT-1008",
+      "provider_id": "PROV-002",
+      "appointment_date": "2026-07-05",
+      "appointment_time": "15:00",
+      "service_type": "Therapy Follow-up",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5009",
+      "patient_id": "PAT-1009",
+      "provider_id": "PROV-003",
+      "appointment_date": "2026-07-06",
+      "appointment_time": "08:30",
+      "service_type": "Medication Management",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5010",
+      "patient_id": "PAT-1010",
+      "provider_id": "PROV-001",
+      "appointment_date": "2026-07-07",
+      "appointment_time": "12:00",
+      "service_type": "Therapy Follow-up",
+      "appointment_status": "Completed"
+    },
+    {
+      "appointment_id": "APT-5011",
+      "patient_id": "PAT-1011",
+      "provider_id": "PROV-002",
+      "appointment_date": "2026-07-08",
+      "appointment_time": "16:00",
+      "service_type": "Initial Assessment",
+      "appointment_status": "Pending Review"
+    },
+    {
+      "appointment_id": "APT-5012",
+      "patient_id": "PAT-1012",
+      "provider_id": "PROV-003",
+      "appointment_date": "2026-07-09",
+      "appointment_time": "09:00",
+      "service_type": "Medication Management",
+      "appointment_status": "Completed"
+    }
+  ],
+  "documentation": [
+    {
+      "note_id": "NOTE-7001",
+      "appointment_id": "APT-5001",
+      "patient_id": "PAT-1001",
+      "provider_id": "PROV-001",
+      "note_date": "2026-07-01",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": "2026-07-01"
+    },
+    {
+      "note_id": "NOTE-7002",
+      "appointment_id": "APT-5002",
+      "patient_id": "PAT-1002",
+      "provider_id": "PROV-001",
+      "note_date": "2026-07-01",
+      "note_status": "Unsigned",
+      "note_type": "Progress Note",
+      "signed_date": null
+    },
+    {
+      "note_id": "NOTE-7003",
+      "appointment_id": "APT-5007",
+      "patient_id": "PAT-1007",
+      "provider_id": "PROV-099",
+      "note_date": "2026-07-04",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": "2026-07-04"
+    },
+    {
+      "note_id": "NOTE-7004",
+      "appointment_id": "APT-5008",
+      "patient_id": "PAT-1008",
+      "provider_id": "PROV-002",
+      "note_date": "2026-07-09",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": "2026-07-09"
+    },
+    {
+      "note_id": "NOTE-7005",
+      "appointment_id": "APT-5009",
+      "patient_id": "PAT-1009",
+      "provider_id": "PROV-003",
+      "note_date": "2026-07-06",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": null
+    },
+    {
+      "note_id": "NOTE-7006",
+      "appointment_id": "APT-5010",
+      "patient_id": "PAT-1010",
+      "provider_id": "PROV-001",
+      "note_date": "2026-07-07",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": "2026-07-07"
+    },
+    {
+      "note_id": "NOTE-7007",
+      "appointment_id": "APT-5010",
+      "patient_id": "PAT-1010",
+      "provider_id": "PROV-001",
+      "note_date": "2026-07-07",
+      "note_status": "Unsigned",
+      "note_type": "Progress Note",
+      "signed_date": null
+    },
+    {
+      "note_id": "NOTE-7008",
+      "appointment_id": "APT-5012",
+      "patient_id": "PAT-1012",
+      "provider_id": "PROV-003",
+      "note_date": "2026-07-10",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": "2026-07-10"
+    },
+    {
+      "note_id": "NOTE-7999",
+      "appointment_id": "APT-5999",
+      "patient_id": "PAT-1999",
+      "provider_id": "PROV-004",
+      "note_date": "2026-07-10",
+      "note_status": "Signed",
+      "note_type": "Progress Note",
+      "signed_date": "2026-07-10"
+    }
+  ]
+}

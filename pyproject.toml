@@ -4,16 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "behavioral-health-documentation-validator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Portfolio-safe validation and exception reporting for synthetic behavioral-health documentation workflows."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.141,<1",
     "pandas>=2.2,<4",
+    "uvicorn>=0.51,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "httpx2>=2.9,<3",
     "pytest>=8,<10",
 ]
 
@@ -27,4 +30,3 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
-

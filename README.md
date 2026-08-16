@@ -1,9 +1,9 @@
 # Behavioral Health Documentation Validator
 
-A portfolio-safe Python reconciliation pipeline that compares **synthetic**
+A portfolio-safe Python automation service that compares **synthetic**
 behavioral-health appointment and documentation records, applies configurable
-deterministic rules, and produces auditable exception and provider-summary
-reports.
+deterministic rules, persists validation history, and exposes auditable results
+through CSV reports and a REST API.
 
 > **Data safety:** This repository contains no real patient information, PHI, real
 > provider data, employer files, credentials, or proprietary EHR rules. Every ID
@@ -13,10 +13,10 @@ reports.
 
 ## Current status
 
-Phase 1 is complete: the command-line MVP loads two CSV files, validates their
-schemas, reconciles records by `appointment_id`, applies versioned rules, and
-writes three reports. The included sample deliberately covers normal records and
-edge cases, and the automated test suite verifies the business logic.
+Phases 1 and 2 are complete. The original CSV command-line workflow remains
+available, and the same deterministic engine now powers a local FastAPI service.
+Successful API batches receive unique UUID run IDs and are stored transactionally
+in SQLite so run history, results, and exceptions can be retrieved later.
 
 ## Business problem
 
@@ -32,13 +32,13 @@ This project converts that workflow into a small, traceable automation product:
 
 ```mermaid
 flowchart LR
-    A["Synthetic appointments CSV"] --> C["Schema validation and normalization"]
-    B["Synthetic documentation CSV"] --> C
-    D["Versioned JSON rules"] --> E["Deterministic rule evaluator"]
+    A["Synthetic CSV files"] --> C["Shared input validation"]
+    B["Synthetic JSON request"] --> API["FastAPI + Pydantic"] --> C
+    D["Server-owned JSON rules"] --> E["Deterministic rule engine"]
     C --> E
-    E --> F["Detailed validation report"]
-    E --> G["Exceptions-only report"]
-    E --> H["Provider summary"]
+    E --> F["CSV reports"]
+    E --> S["Application service"] --> DB["SQLite run history + results"]
+    DB --> API
 ```
 
 The authoritative match key is `appointment_id`. For appointments whose status
@@ -57,13 +57,16 @@ The project demonstrates more than calling an automation tool:
 - validating data contracts and failing with useful error messages;
 - making rule behavior configurable without creating a custom rules language;
 - calculating provider metrics with a documented denominator;
-- producing repeatable, machine-readable artifacts from a CLI; and
+- producing repeatable, machine-readable artifacts from a CLI;
+- modeling relational run history and atomic database transactions;
+- designing versioned REST endpoints, typed JSON contracts, pagination, and
+  stable error responses; and
 - using synthetic, minimum-necessary fields for a public portfolio project.
 
 **My role:** workflow analysis, rule definition, automation design,
 implementation, testing, reporting, and process-improvement documentation.
 
-## MVP scope
+## Implemented scope
 
 Included in Phase 1:
 
@@ -74,14 +77,26 @@ Included in Phase 1:
 - deterministic rule precedence with stable `rule_code` and `issue_codes` fields;
 - explicit handling for duplicate matching notes and orphan documentation;
 - detailed, provider-summary, and exceptions-only CSV reports;
-- logging, a command-line interface, 31 automated tests, and example outputs.
+- logging, a command-line interface, and example outputs.
 
-Intentionally deferred until the core rules are trustworthy:
+Added in Phase 2:
 
-- SQLite run history and a small dashboard;
-- a REST API and meaningful local n8n orchestration;
-- CI, screenshots, and optional Docker packaging;
-- optional AI-generated summaries that never alter deterministic results.
+- a shared in-memory service used by both CSV and API adapters;
+- SQLite schema versioning, UUID run IDs, UTC timestamps, and run history;
+- atomic persistence of run metadata and every detailed validation result;
+- persisted exceptions selected from results without duplicating state;
+- FastAPI/Pydantic JSON request and response models;
+- health, create-run, history, detail, results, and exceptions endpoints;
+- consistent `422`, `404`, `500`, and `503` JSON error envelopes;
+- pagination and a REST `Location` header for newly created runs; and
+- 61 automated rule, pipeline, persistence, transaction, and API tests.
+
+Intentionally deferred:
+
+- n8n orchestration, webhook/retry behavior, and idempotency keys;
+- a dashboard and reviewer disposition workflow;
+- optional AI summaries that never alter deterministic results;
+- CI, screenshots, and optional Docker packaging.
 
 ## Quick start
 
@@ -92,6 +107,11 @@ Requirements: Python 3.11 or newer.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Run the original CSV workflow:
+
+```powershell
 .\.venv\Scripts\python.exe -m bh_doc_validator `
   --appointments data/sample/appointments.csv `
   --documentation data/sample/documentation.csv `
@@ -104,6 +124,11 @@ python -m venv .venv
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
+```
+
+Run the original CSV workflow:
+
+```bash
 .venv/bin/python -m bh_doc_validator \
   --appointments data/sample/appointments.csv \
   --documentation data/sample/documentation.csv \
@@ -127,6 +152,52 @@ Generated files:
 
 Reproducible repository examples are available in
 [`examples/output`](examples/output).
+
+## REST API and SQLite run history
+
+Start the API locally from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn bh_doc_validator.api:app `
+  --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/docs` for FastAPI's interactive OpenAPI interface.
+The documented launch command intentionally binds to localhost for this
+portfolio phase.
+
+Submit the committed synthetic JSON example from a second PowerShell window:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/v1/runs `
+  -ContentType application/json `
+  -InFile data/sample/validation_request.json
+```
+
+Successful creation returns `201 Created`, a UUID, UTC timestamp, rules version,
+and summary counts. It also includes a `Location` response header for the new run.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/health` | Confirm the local API can access SQLite |
+| `POST` | `/api/v1/runs` | Validate a JSON batch and atomically persist it |
+| `GET` | `/api/v1/runs` | Retrieve paginated run history, newest first |
+| `GET` | `/api/v1/runs/{run_id}` | Retrieve one run's metadata |
+| `GET` | `/api/v1/runs/{run_id}/results` | Retrieve persisted detailed results |
+| `GET` | `/api/v1/runs/{run_id}/exceptions` | Retrieve only persisted exception rows |
+
+The default database is `data/local/validator.sqlite3`, which Git ignores. Set
+`BH_VALIDATOR_DATABASE_PATH` or `BH_VALIDATOR_CONFIG_PATH` before starting the
+server to override the local paths. See [`docs/api.md`](docs/api.md) for the JSON
+contract and error model.
+
+SQLite uses two tables: `validation_runs` and `validation_results`. Exceptions
+are result rows where `is_exception = 1`; there is no duplicate exception table
+that could drift out of sync. Validation completes before a short write
+transaction inserts the run and every result. Any insert failure rolls back the
+whole run.
 
 ## Validation outcomes
 
@@ -200,13 +271,14 @@ Run all tests:
 Current verified result:
 
 ```text
-31 passed
+61 passed
 ```
 
-The suite covers every primary rule, precedence with simultaneous issues,
-inclusive date tolerance, configurable no-show behavior, duplicate and orphan
-records, order independence, invalid inputs, invalid configuration, provider
-metrics, and an end-to-end report-generation run.
+The suite covers every primary rule, the CSV regression path, precedence with
+simultaneous issues, invalid inputs, SQLite schema initialization, persistence
+across repository instances, UUID uniqueness, exception filtering, transaction
+rollback, JSON typing, REST status codes, sanitized errors, pagination, and the
+complete API workflow.
 
 ## Project structure
 
@@ -215,8 +287,8 @@ config/                 Versioned validation parameters
 data/sample/            Synthetic input fixtures
 docs/                   Architecture and rule documentation
 examples/output/        Reproducible sample reports
-src/bh_doc_validator/   Input, rules, reporting, pipeline, and CLI code
-tests/                  Unit and end-to-end tests
+src/bh_doc_validator/   Rules, service, SQLite, API, pipeline, and CLI code
+tests/                  Unit, persistence, API, and end-to-end tests
 PORTFOLIO_PROGRESS.md   Completed work, learning evidence, and roadmap
 ```
 
@@ -226,19 +298,24 @@ the phased evolution plan.
 ## Limitations
 
 - This is a portfolio MVP, not a production clinical or compliance system.
-- CSVs are processed as a batch; there is no database or run history yet.
+- API processing is synchronous and intended for small local synthetic batches.
 - The input contract expects one unique appointment row and one unique `note_id`.
 - Duplicate notes linked to one appointment are flagged rather than resolved.
+- SQLite is appropriate for this single local service, not a scale claim.
+- The API has no authentication, TLS, rate limiting, or request-size enforcement;
+  it should remain bound to `127.0.0.1` during this portfolio phase.
+- Failed input requests are not added to run history; only completed runs persist.
+- Raw input payloads and provider summaries are not stored, minimizing retention.
 - The system does not read narrative clinical content or assess clinical quality.
 - There is no connection to any real EHR, employer system, or Office Ally account.
 
 ## Roadmap
 
-1. **Phase 2 — operational visibility:** SQLite persistence and a lightweight
-   dashboard for filters, metrics, and review queues.
-2. **Phase 3 — integration:** a small REST endpoint plus an exported local n8n
-   workflow that triggers validation, stores results, and creates a demo alert.
-3. **Phase 4 — hardening:** CI, screenshots, optional Docker, run manifests,
-   expanded negative tests, and performance checks.
-4. **Phase 5 — optional assistive AI:** natural-language operations summaries or
-   prioritization suggestions, clearly labeled and always subject to human review.
+1. **Phase 3 — n8n automation:** trigger the API with synthetic data, branch on
+   exception counts, retrieve exceptions, create a local notification/review
+   task, and add an idempotency key before enabling retries.
+2. **Phase 4 — dashboard and portfolio polish:** add a lightweight run/exception
+   dashboard, CI, screenshots, and optional packaging improvements.
+3. **Later optional AI:** summarize exceptions or suggest review priority using
+   persisted deterministic evidence. AI will never create or overwrite the
+   source-of-truth validation result.

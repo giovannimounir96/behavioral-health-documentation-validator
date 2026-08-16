@@ -43,6 +43,10 @@ class ValidationConfig:
             raise ConfigurationError(
                 f"Configuration is not valid JSON ({config_path}): {exc.msg}"
             ) from exc
+        except (OSError, UnicodeError) as exc:
+            raise ConfigurationError(
+                f"Configuration file could not be read: {config_path}"
+            ) from exc
 
         if not isinstance(raw, dict):
             raise ConfigurationError("Configuration root must be a JSON object.")
