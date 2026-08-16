@@ -1,0 +1,14 @@
+appointment_id,patient_id,provider_id,appointment_date,appointment_time,service_type,appointment_status
+APT-5001,PAT-1001,PROV-001,2026-07-01,09:00,Medication Management,Completed
+APT-5002,PAT-1002,PROV-001,2026-07-01,10:00,Therapy Follow-up,Completed
+APT-5003,PAT-1003,PROV-002,2026-07-02,11:00,Initial Assessment,Completed
+APT-5004,PAT-1004,PROV-002,2026-07-02,13:00,Therapy Follow-up,Cancelled
+APT-5005,PAT-1005,PROV-003,2026-07-03,09:30,Medication Management,No Show
+APT-5006,PAT-1006,PROV-003,2026-07-03,14:00,Therapy Follow-up,Rescheduled
+APT-5007,PAT-1007,PROV-001,2026-07-04,10:30,Medication Management,Completed
+APT-5008,PAT-1008,PROV-002,2026-07-05,15:00,Therapy Follow-up,Completed
+APT-5009,PAT-1009,PROV-003,2026-07-06,08:30,Medication Management,Completed
+APT-5010,PAT-1010,PROV-001,2026-07-07,12:00,Therapy Follow-up,Completed
+APT-5011,PAT-1011,PROV-002,2026-07-08,16:00,Initial Assessment,Pending Review
+APT-5012,PAT-1012,PROV-003,2026-07-09,09:00,Medication Management,Completed
+

@@ -1,0 +1,16 @@
+{
+  "rules_version": "1.0.0",
+  "date_tolerance_days": 1,
+  "no_show_policy": "no_documentation_required",
+  "require_signed_date_for_signed_notes": true,
+  "appointment_status_groups": {
+    "documentation_required": ["Completed"],
+    "cancelled": ["Cancelled"],
+    "no_show": ["No Show"],
+    "rescheduled": ["Rescheduled"]
+  },
+  "note_status_groups": {
+    "signed": ["Signed"],
+    "unsigned": ["Unsigned"]
+  }
+}
