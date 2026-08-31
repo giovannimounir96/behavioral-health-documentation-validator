@@ -3,7 +3,7 @@
 A portfolio-safe Python automation service that compares **synthetic**
 behavioral-health appointment and documentation records, applies configurable
 deterministic rules, persists validation history, and exposes auditable results
-through CSV reports and a REST API.
+through CSV reports, a REST API, and a retry-safe n8n workflow.
 
 > **Data safety:** This repository contains no real patient information, PHI, real
 > provider data, employer files, credentials, or proprietary EHR rules. Every ID
@@ -13,10 +13,11 @@ through CSV reports and a REST API.
 
 ## Current status
 
-Phases 1 and 2 are complete. The original CSV command-line workflow remains
-available, and the same deterministic engine now powers a local FastAPI service.
-Successful API batches receive unique UUID run IDs and are stored transactionally
-in SQLite so run history, results, and exceptions can be retrieved later.
+Phases 1, 2, and 3 are complete. The original CSV workflow still works, the same
+deterministic engine powers a local FastAPI service, and an exported n8n workflow
+now orchestrates webhook/manual triggers, JSON API calls, result retrieval,
+exception routing, human-review notification, bounded retries, and operational
+failure handling. SQLite idempotency prevents retry-created duplicate runs.
 
 ## Business problem
 
@@ -33,12 +34,16 @@ This project converts that workflow into a small, traceable automation product:
 ```mermaid
 flowchart LR
     A["Synthetic CSV files"] --> C["Shared input validation"]
-    B["Synthetic JSON request"] --> API["FastAPI + Pydantic"] --> C
+    T["Manual trigger / webhook"] --> N["n8n JSON orchestration"]
+    N --> B["Synthetic JSON request + Idempotency-Key"]
+    B --> API["FastAPI + Pydantic"] --> C
     D["Server-owned JSON rules"] --> E["Deterministic rule engine"]
     C --> E
     E --> F["CSV reports"]
     E --> S["Application service"] --> DB["SQLite run history + results"]
     DB --> API
+    API --> N
+    N --> R["Success / exception / human-review / failure routing"]
 ```
 
 The authoritative match key is `appointment_id`. For appointments whose status
@@ -60,7 +65,11 @@ The project demonstrates more than calling an automation tool:
 - producing repeatable, machine-readable artifacts from a CLI;
 - modeling relational run history and atomic database transactions;
 - designing versioned REST endpoints, typed JSON contracts, pagination, and
-  stable error responses; and
+  stable error responses;
+- making retrying POST requests safe through canonical fingerprints, database
+  uniqueness, replay responses, and conflict detection;
+- building event-driven n8n orchestration with webhooks, HTTP/JSON mapping,
+  branching, bounded retry paths, and a human-review boundary; and
 - using synthetic, minimum-necessary fields for a public portfolio project.
 
 **My role:** workflow analysis, rule definition, automation design,
@@ -91,9 +100,24 @@ Added in Phase 2:
 - pagination and a REST `Location` header for newly created runs; and
 - 61 automated rule, pipeline, persistence, transaction, and API tests.
 
+Added in Phase 3:
+
+- optional `Idempotency-Key` support that preserves Phase 2 clients;
+- SQLite schema version 2 with a partial unique key index and SHA-256 request
+  fingerprints, including automatic migration from schema version 1;
+- `201` creation, `200` replay, and `409 IDEMPOTENCY_CONFLICT` semantics;
+- atomic and concurrent retry protection with failures never reserving a key;
+- an importable n8n `2.34.6` workflow with Manual and Webhook triggers;
+- synthetic review, clean, and deterministic-exception scenarios;
+- POST, results GET, exceptions GET, UUID context storage, two-stage branching,
+  a local human-review notification, and operational summaries;
+- three bounded attempts on every HTTP node with stage-specific terminal error
+  routing; and
+- 77 automated tests, including idempotency concurrency and static workflow
+  contract checks, plus live n8n/FastAPI/SQLite end-to-end verification.
+
 Intentionally deferred:
 
-- n8n orchestration, webhook/retry behavior, and idempotency keys;
 - a dashboard and reviewer disposition workflow;
 - optional AI summaries that never alter deterministic results;
 - CI, screenshots, and optional Docker packaging.
@@ -172,12 +196,16 @@ Submit the committed synthetic JSON example from a second PowerShell window:
 Invoke-RestMethod `
   -Method Post `
   -Uri http://127.0.0.1:8000/api/v1/runs `
+  -Headers @{ "Idempotency-Key" = "powershell-demo-001" } `
   -ContentType application/json `
   -InFile data/sample/validation_request.json
 ```
 
-Successful creation returns `201 Created`, a UUID, UTC timestamp, rules version,
-and summary counts. It also includes a `Location` response header for the new run.
+Successful keyed creation returns `201 Created`, a UUID, UTC timestamp, rules
+version, and summary counts. Retrying the same key and JSON returns the original
+run with `200 OK` and `Idempotency-Replayed: true`; the run count stays unchanged.
+Reusing a key with different JSON returns `409 Conflict`. The key is optional so
+unkeyed Phase 2 clients retain their original create-a-new-run behavior.
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -198,6 +226,32 @@ are result rows where `is_exception = 1`; there is no duplicate exception table
 that could drift out of sync. Validation completes before a short write
 transaction inserts the run and every result. Any insert failure rolls back the
 whole run.
+
+## n8n automation
+
+The committed export is
+[`n8n/workflows/behavioral-health-validation.json`](n8n/workflows/behavioral-health-validation.json).
+It uses only built-in, credential-free nodes and contains no AI integration.
+
+```mermaid
+flowchart TD
+    T["Manual or webhook trigger"] --> N["Prepare synthetic JSON + stable key"]
+    N --> P["POST validation run"] --> A["FastAPI → deterministic validator → SQLite"]
+    A --> G["GET results and exceptions"] --> E{"Exceptions?"}
+    E -- "No" --> S["Success summary"]
+    E -- "Yes" --> H{"Human review?"}
+    H -- "No" --> D["Deterministic follow-up summary"]
+    H -- "Yes" --> R["Review notification + packet"] --> U["Human reviewer"]
+    P -. "Retries exhausted" .-> F["Failed execution"]
+    G -. "Retries exhausted" .-> F
+```
+
+The default manual run uses the four-record review scenario. Webhook callers can
+choose `review`, `clean`, or `deterministic_exception` and provide a stable
+`job_id`. The webhook returns `202 Accepted`; the execution continues in n8n.
+See [`docs/n8n-workflow.md`](docs/n8n-workflow.md) for local setup, a simple
+node-by-node explanation, retry behavior, verification evidence, and interview
+concepts.
 
 ## Validation outcomes
 
@@ -271,14 +325,16 @@ Run all tests:
 Current verified result:
 
 ```text
-61 passed
+77 passed
 ```
 
 The suite covers every primary rule, the CSV regression path, precedence with
 simultaneous issues, invalid inputs, SQLite schema initialization, persistence
 across repository instances, UUID uniqueness, exception filtering, transaction
 rollback, JSON typing, REST status codes, sanitized errors, pagination, and the
-complete API workflow.
+complete API workflow. Phase 3 tests add schema migration, keyed replay/conflict,
+concurrent retry safety, restart persistence, OpenAPI idempotency documentation,
+and the exported n8n graph/API/retry contract.
 
 ## Project structure
 
@@ -287,8 +343,9 @@ config/                 Versioned validation parameters
 data/sample/            Synthetic input fixtures
 docs/                   Architecture and rule documentation
 examples/output/        Reproducible sample reports
+n8n/workflows/           Importable, portfolio-readable n8n workflow export
 src/bh_doc_validator/   Rules, service, SQLite, API, pipeline, and CLI code
-tests/                  Unit, persistence, API, and end-to-end tests
+tests/                  Unit, persistence, API, and workflow-contract tests
 PORTFOLIO_PROGRESS.md   Completed work, learning evidence, and roadmap
 ```
 
@@ -306,16 +363,19 @@ the phased evolution plan.
   it should remain bound to `127.0.0.1` during this portfolio phase.
 - Failed input requests are not added to run history; only completed runs persist.
 - Raw input payloads and provider summaries are not stored, minimizing retention.
+- Idempotency keys are operational identifiers, not secrets; callers must use a
+  new key for genuinely new work.
+- The n8n webhook and API have no authentication and should remain local. The
+  review notification is the local execution output, not an email/ticket system.
+- The n8n result GETs request at most 200 rows; larger batches would need a
+  pagination loop.
 - The system does not read narrative clinical content or assess clinical quality.
 - There is no connection to any real EHR, employer system, or Office Ally account.
 
 ## Roadmap
 
-1. **Phase 3 — n8n automation:** trigger the API with synthetic data, branch on
-   exception counts, retrieve exceptions, create a local notification/review
-   task, and add an idempotency key before enabling retries.
-2. **Phase 4 — dashboard and portfolio polish:** add a lightweight run/exception
+1. **Phase 4 — dashboard and portfolio polish:** add a lightweight run/exception
    dashboard, CI, screenshots, and optional packaging improvements.
-3. **Later optional AI:** summarize exceptions or suggest review priority using
+2. **Later optional AI:** summarize exceptions or suggest review priority using
    persisted deterministic evidence. AI will never create or overwrite the
    source-of-truth validation result.

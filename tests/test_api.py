@@ -56,6 +56,29 @@ def test_openapi_documents_runtime_error_envelopes(
     assert health_error_schema["$ref"].endswith("/ErrorResponse")
 
 
+def test_openapi_documents_idempotency_contract(
+    tmp_path: Path, project_root: Path
+) -> None:
+    application = create_app(
+        database_path=tmp_path / "api.sqlite3",
+        config_path=project_root / "config/validation_rules.json",
+    )
+    operation = application.openapi()["paths"]["/api/v1/runs"]["post"]
+    header = next(
+        parameter
+        for parameter in operation["parameters"]
+        if parameter["name"] == "Idempotency-Key"
+    )
+
+    assert header["in"] == "header"
+    assert header["required"] is False
+    assert {"200", "201", "409"}.issubset(operation["responses"])
+    conflict_schema = operation["responses"]["409"]["content"][
+        "application/json"
+    ]["schema"]
+    assert conflict_schema["$ref"].endswith("/ErrorResponse")
+
+
 def test_committed_sample_json_is_a_runnable_request(
     api_client: TestClient, project_root: Path
 ) -> None:
@@ -124,6 +147,143 @@ def test_two_api_runs_have_unique_ids_and_paginated_history(
     assert body["limit"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["run_id"] == second["run_id"]
+
+
+def test_same_idempotency_key_and_request_replays_completed_run(
+    api_client: TestClient, sample_payload: dict[str, object]
+) -> None:
+    headers = {"Idempotency-Key": "n8n-execution-1001"}
+
+    first = api_client.post("/api/v1/runs", json=sample_payload, headers=headers)
+    replay = api_client.post("/api/v1/runs", json=sample_payload, headers=headers)
+
+    assert first.status_code == 201
+    assert replay.status_code == 200
+    assert first.json() == replay.json()
+    assert first.headers["Idempotency-Replayed"] == "false"
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert first.headers["Location"] == replay.headers["Location"]
+    assert api_client.get("/api/v1/runs").json()["total"] == 1
+
+
+def test_idempotency_fingerprint_ignores_json_object_key_order(
+    api_client: TestClient, sample_payload: dict[str, object]
+) -> None:
+    reordered = {
+        "documentation": sample_payload["documentation"],
+        "appointments": sample_payload["appointments"],
+        "source": sample_payload["source"],
+    }
+    headers = {"Idempotency-Key": "n8n-execution-object-order"}
+
+    first = api_client.post("/api/v1/runs", json=sample_payload, headers=headers)
+    replay = api_client.post("/api/v1/runs", json=reordered, headers=headers)
+
+    assert first.status_code == 201
+    assert replay.status_code == 200
+    assert replay.json()["run_id"] == first.json()["run_id"]
+
+
+def test_idempotency_key_reuse_with_different_request_returns_409(
+    api_client: TestClient, sample_payload: dict[str, object]
+) -> None:
+    headers = {"Idempotency-Key": "n8n-execution-conflict"}
+    first = api_client.post("/api/v1/runs", json=sample_payload, headers=headers)
+    sample_payload["source"] = "different-source"
+
+    conflict = api_client.post(
+        "/api/v1/runs", json=sample_payload, headers=headers
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert conflict.json() == {
+        "error": {
+            "code": "IDEMPOTENCY_CONFLICT",
+            "message": (
+                "The Idempotency-Key was already used with a different request."
+            ),
+        }
+    }
+    assert api_client.get("/api/v1/runs").json()["total"] == 1
+
+
+@pytest.mark.parametrize(
+    "idempotency_key",
+    ["", "contains spaces", "x" * 129],
+)
+def test_invalid_idempotency_key_returns_422_without_run(
+    api_client: TestClient,
+    sample_payload: dict[str, object],
+    idempotency_key: str,
+) -> None:
+    response = api_client.post(
+        "/api/v1/runs",
+        json=sample_payload,
+        headers={"Idempotency-Key": idempotency_key},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "REQUEST_VALIDATION_ERROR"
+    assert api_client.get("/api/v1/runs").json()["total"] == 0
+
+
+def test_failed_request_does_not_reserve_idempotency_key(
+    api_client: TestClient, sample_payload: dict[str, object]
+) -> None:
+    headers = {"Idempotency-Key": "n8n-corrected-retry"}
+    sample_payload["appointments"].append(
+        sample_payload["appointments"][0].copy()
+    )
+
+    rejected = api_client.post(
+        "/api/v1/runs", json=sample_payload, headers=headers
+    )
+    sample_payload["appointments"].pop()
+    corrected = api_client.post(
+        "/api/v1/runs", json=sample_payload, headers=headers
+    )
+
+    assert rejected.status_code == 422
+    assert corrected.status_code == 201
+    assert corrected.headers["Idempotency-Replayed"] == "false"
+    assert api_client.get("/api/v1/runs").json()["total"] == 1
+
+
+def test_idempotent_replay_survives_application_restart(
+    tmp_path: Path,
+    project_root: Path,
+    sample_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "restart.sqlite3"
+    headers = {"Idempotency-Key": "external-event-9001"}
+
+    with TestClient(
+        create_app(
+            database_path=database_path,
+            config_path=project_root / "config/validation_rules.json",
+        )
+    ) as first_client:
+        first = first_client.post(
+            "/api/v1/runs", json=sample_payload, headers=headers
+        )
+
+    with TestClient(
+        create_app(
+            database_path=database_path,
+            config_path=project_root / "config/validation_rules.json",
+        )
+    ) as restarted_client:
+        replay = restarted_client.post(
+            "/api/v1/runs", json=sample_payload, headers=headers
+        )
+        history = restarted_client.get("/api/v1/runs").json()
+
+    assert first.status_code == 201
+    assert replay.status_code == 200
+    assert first.json()["run_id"] == replay.json()["run_id"]
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert history["total"] == 1
 
 
 @pytest.mark.parametrize(

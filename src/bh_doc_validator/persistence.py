@@ -10,11 +10,15 @@ from typing import Any
 
 import pandas as pd
 
-from .exceptions import PersistenceError, RunNotFoundError
+from .exceptions import (
+    IdempotencyConflictError,
+    PersistenceError,
+    RunNotFoundError,
+)
 from .validation import DETAIL_COLUMNS
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -41,7 +45,7 @@ class SQLiteRunRepository:
         self.database_path = Path(database_path)
 
     def initialize(self) -> None:
-        """Create schema version 1 or reject an unsupported newer schema."""
+        """Create the current schema, migrate v1, or reject newer schemas."""
 
         try:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,6 +59,10 @@ class SQLiteRunRepository:
                 if version == 0:
                     with connection:
                         _create_schema(connection)
+                        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                elif version == 1:
+                    with connection:
+                        _migrate_v1_to_v2(connection)
                         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 elif version != SCHEMA_VERSION:
                     raise PersistenceError(
@@ -75,6 +83,53 @@ class SQLiteRunRepository:
     def save_run(self, run: RunRecord, results: pd.DataFrame) -> None:
         """Insert metadata and all results in one all-or-nothing transaction."""
 
+        self._save_run(run, results)
+
+    def save_run_idempotently(
+        self,
+        run: RunRecord,
+        results: pd.DataFrame,
+        *,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> tuple[RunRecord, bool]:
+        """Atomically create a keyed run or replay its completed predecessor."""
+
+        return self._save_run(
+            run,
+            results,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+
+    def get_run_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> RunRecord | None:
+        """Return a matching completed run, or reject conflicting key reuse."""
+
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT * FROM validation_runs WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise PersistenceError("Could not read the idempotency record.") from exc
+
+        return _matching_idempotent_run(row, request_fingerprint)
+
+    def _save_run(
+        self,
+        run: RunRecord,
+        results: pd.DataFrame,
+        *,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> tuple[RunRecord, bool]:
+        """Persist a run; keyed writes serialize their check-and-insert step."""
+
         missing_columns = [column for column in DETAIL_COLUMNS if column not in results]
         if missing_columns:
             raise PersistenceError(
@@ -85,13 +140,26 @@ class SQLiteRunRepository:
         try:
             with closing(self._connect()) as connection:
                 with connection:
+                    if idempotency_key is not None:
+                        connection.execute("BEGIN IMMEDIATE")
+                        existing = connection.execute(
+                            "SELECT * FROM validation_runs WHERE idempotency_key = ?",
+                            (idempotency_key,),
+                        ).fetchone()
+                        matching_run = _matching_idempotent_run(
+                            existing, request_fingerprint
+                        )
+                        if matching_run is not None:
+                            return matching_run, True
+
                     connection.execute(
                         """
                         INSERT INTO validation_runs (
                             run_id, created_at, source, rules_version,
                             appointment_count, documentation_count, result_count,
-                            valid_count, exception_count, review_count
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            valid_count, exception_count, review_count,
+                            idempotency_key, request_fingerprint
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             run.run_id,
@@ -104,6 +172,8 @@ class SQLiteRunRepository:
                             run.valid_count,
                             run.exception_count,
                             run.review_count,
+                            idempotency_key,
+                            request_fingerprint,
                         ),
                     )
                     connection.executemany(
@@ -115,6 +185,9 @@ class SQLiteRunRepository:
                             )
                         ),
                     )
+            return run, False
+        except IdempotencyConflictError:
+            raise
         except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
             raise PersistenceError("Could not persist the validation run.") from exc
 
@@ -227,7 +300,16 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             result_count INTEGER NOT NULL CHECK (result_count >= 0),
             valid_count INTEGER NOT NULL CHECK (valid_count >= 0),
             exception_count INTEGER NOT NULL CHECK (exception_count >= 0),
-            review_count INTEGER NOT NULL CHECK (review_count >= 0)
+            review_count INTEGER NOT NULL CHECK (review_count >= 0),
+            idempotency_key TEXT,
+            request_fingerprint TEXT CHECK (
+                (idempotency_key IS NULL AND request_fingerprint IS NULL)
+                OR (
+                    idempotency_key IS NOT NULL
+                    AND request_fingerprint IS NOT NULL
+                    AND length(request_fingerprint) = 64
+                )
+            )
         )
         """
     )
@@ -257,6 +339,35 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             PRIMARY KEY (run_id, result_order),
             FOREIGN KEY (run_id) REFERENCES validation_runs(run_id) ON DELETE CASCADE
         )
+        """
+    )
+    _create_indexes(connection)
+
+
+def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
+    connection.execute("ALTER TABLE validation_runs ADD COLUMN idempotency_key TEXT")
+    connection.execute(
+        """
+        ALTER TABLE validation_runs
+        ADD COLUMN request_fingerprint TEXT CHECK (
+            (idempotency_key IS NULL AND request_fingerprint IS NULL)
+            OR (
+                idempotency_key IS NOT NULL
+                AND request_fingerprint IS NOT NULL
+                AND length(request_fingerprint) = 64
+            )
+        )
+        """
+    )
+    _create_indexes(connection)
+
+
+def _create_indexes(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_validation_runs_idempotency_key
+        ON validation_runs (idempotency_key)
+        WHERE idempotency_key IS NOT NULL
         """
     )
     connection.execute(
@@ -323,6 +434,22 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         valid_count=row["valid_count"],
         exception_count=row["exception_count"],
         review_count=row["review_count"],
+    )
+
+
+def _matching_idempotent_run(
+    row: sqlite3.Row | None,
+    request_fingerprint: str | None,
+) -> RunRecord | None:
+    if row is None:
+        return None
+    if (
+        request_fingerprint is not None
+        and row["request_fingerprint"] == request_fingerprint
+    ):
+        return _row_to_run(row)
+    raise IdempotencyConflictError(
+        "The Idempotency-Key was already used with a different request."
     )
 
 

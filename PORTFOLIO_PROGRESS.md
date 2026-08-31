@@ -1,15 +1,16 @@
 # Portfolio progress
 
-Last updated: 2026-08-16
+Last updated: 2026-08-31
 
 ## Current milestone
 
-**Phase 2 — SQLite persistence and REST API: complete**
+**Phase 3 — n8n automation integration: complete**
 
-The repository now has two working delivery paths around one rule engine: the
-original CSV CLI and a local JSON REST API. API runs receive UUIDs and UTC
-timestamps, and completed metadata/results are stored atomically in SQLite. The
-next milestone is n8n orchestration, not new validation logic.
+The repository now has three working delivery paths around one rule engine: the
+original CSV CLI, a local JSON REST API, and an exported n8n workflow. API runs
+receive UUIDs and UTC timestamps, completed metadata/results are stored
+atomically in SQLite, and automation retries are idempotent. The next milestone
+is dashboard/portfolio polish, not new validation logic.
 
 ## Completed features and evidence
 
@@ -32,8 +33,14 @@ next milestone is n8n orchestration, not new validation logic.
 | Versioned FastAPI endpoints | Make the validator callable by n8n and other tools | `/api/v1/runs`; `docs/api.md` | REST, HTTP methods/statuses, OpenAPI |
 | Typed JSON contract | Validate nested inputs and serialize typed outputs | `api_models.py`; API schema/type tests | JSON, Pydantic, contract-first integration |
 | Sanitized API errors | Return actionable codes without leaking paths/payloads | error handlers and negative tests | Error taxonomy, security boundaries |
-| Automated test suite | Prove rules, CSV, database, and API behavior are stable | `.venv\Scripts\python.exe -m pytest` → `61 passed` | pytest, unit, integration, API, transaction testing |
+| Automated test suite | Prove rules, CSV, database, API, and workflow contracts are stable | `.venv\Scripts\python.exe -m pytest` → `77 passed` | pytest, unit, integration, API, transaction, workflow testing |
 | Architecture and setup documentation | Let a recruiter run and evaluate the work | `README.md`, `docs/architecture.md` | Technical communication, system design |
+| Retry-safe idempotent run creation | Make automation retries replay a run instead of creating duplicates | `Idempotency-Key`, `201` create / `200` replay / `409` conflict tests | Distributed-systems thinking, API contracts, concurrency |
+| Schema-versioned idempotency metadata | Preserve existing SQLite databases while adding the retry boundary | schema v2 migration and partial unique-index tests | Safe migrations, SQL constraints, backward compatibility |
+| n8n workflow export | Demonstrate a publishable automation artifact around the existing API | `n8n/workflows/behavioral-health-validation.json`; n8n 2.34.6 import/execute | Workflow orchestration, HTTP, JSON, webhooks |
+| Branching and human-review routing | Turn deterministic exceptions into explicit operational paths | clean, deterministic-exception, and review scenarios | Conditional routing, human-in-the-loop design |
+| Bounded API retries and failure route | Keep transient retries safe and make outages visible | three-attempt HTTP nodes plus failed-execution marker path | Reliability, failure handling, observability |
+| Live local end-to-end verification | Prove trigger → API → SQLite → retrieval → branch behavior | webhook/manual runs, replay, and API-unavailable checks | Integration testing, reproducibility, troubleshooting |
 
 ## Technical concepts learned
 
@@ -56,31 +63,30 @@ next milestone is n8n orchestration, not new validation logic.
   different outcomes to an automation client.
 - Why synchronous pandas/sqlite work should use normal FastAPI `def` handlers.
 - How dependency injection and temporary database files make APIs testable.
+- How an idempotency key names one logical automation job, why the request
+  fingerprint protects against accidental key reuse, and how `201`, `200`, and
+  `409` make create/replay/conflict behavior explicit.
+- Why the definitive idempotency check belongs in the atomic database
+  transaction, even when a preliminary lookup makes common replays fast.
+- How a `202 Accepted` webhook response acknowledges receipt while n8n owns the
+  eventual workflow outcome.
+- How an orchestrator should move JSON and route state without duplicating the
+  deterministic rule engine.
+- How bounded retries, a separate error output, and a human-review branch turn
+  API failures and ambiguous records into visible operational work.
 
 ## Remaining phases
 
-### Phase 3 — n8n integration
-
-- Create an n8n workflow: receive batch → call validator → branch on exceptions →
-  retrieve persisted exceptions → send a local/demo notification or create a
-  human-review task.
-- Add a workflow execution/idempotency key before enabling HTTP retries so a
-  retry cannot create a duplicate validation run.
-- Exercise webhook concepts only where they improve the workflow.
-- Export the workflow JSON and document success, no-exception, and error paths.
-- Avoid paid APIs during local development.
-
-### Phase 4 — dashboard, selected AI, and portfolio polish
+### Phase 4 — dashboard and portfolio polish
 
 - Add a lightweight dashboard for run history, filters, and exception review.
 - Add GitHub Actions for tests.
 - Capture screenshots and improve the end-to-end portfolio narrative.
 - Consider optional Docker packaging only if it simplifies the n8n demo.
-- Evaluate an exception-summary or prioritization feature using only persisted
-  deterministic output fields.
-- Label generated text as a suggestion and preserve source issue codes.
-- Require human review for any prioritization suggestion.
-- Do not let an LLM create or overwrite validation outcomes.
+- Evaluate carefully selected AI only if it adds genuine value, such as
+  summarizing persisted exceptions or assisting reviewer prioritization.
+- Label generated text as a suggestion, preserve source issue codes, require
+  human review, and never let an LLM create or overwrite validation outcomes.
 
 ## Known limitations and open decisions
 
@@ -92,7 +98,8 @@ next milestone is n8n orchestration, not new validation logic.
 - Invalid requests do not create failed-run audit rows; only completed runs are
   persisted.
 - Raw input payloads are not stored, so a run cannot yet be replayed from SQLite.
-- There is no idempotency key yet; Phase 3 must add one before n8n retries.
+- Idempotency keys are operational identifiers, not secrets; production use
+  would add authentication, TLS, rate limits, and retention/cleanup policy.
 - Duplicate primary IDs fail the run; future ingestion may add a separate reject
   file if partial processing becomes a requirement.
 - Date tolerance is symmetric; a real policy could need separate before/after
@@ -106,8 +113,9 @@ next milestone is n8n orchestration, not new validation logic.
 
 ## Bugs / issues
 
-No known Phase 1 or Phase 2 defects. All 61 tests pass on Python 3.13.14 with
-pandas 3.0.5, FastAPI 0.141.1, and SQLite 3.50.4.
+No known Phase 1, Phase 2, or Phase 3 defects. All 77 tests pass on Python
+3.13.14 with pandas 3.0.5, FastAPI 0.141.1, SQLite 3.50.4, and n8n 2.34.6
+local end-to-end verification.
 
 ## Ideas for future improvement
 
@@ -115,9 +123,10 @@ pandas 3.0.5, FastAPI 0.141.1, and SQLite 3.50.4.
 - Add a separate input-reject report for partial batch acceptance.
 - Add a configuration checksum so a rules-version label cannot drift from its
   actual settings.
-- Add idempotent run creation for automation retries.
 - Consider storing an input checksum without retaining raw inputs.
 - Measure validation time on generated synthetic batches of increasing size.
 - Add a reviewer disposition/audit trail only when the dashboard workflow is
   defined.
+- Connect the human-review packet to a real notification or ticketing adapter
+  only when a concrete deployment context exists.
 - Compare deterministic output snapshots across rules versions.

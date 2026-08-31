@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 import sqlite3
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import pandas as pd
@@ -11,7 +13,11 @@ import pytest
 from bh_doc_validator.config import ValidationConfig
 from bh_doc_validator.exceptions import PersistenceError, RunNotFoundError
 from bh_doc_validator.io import load_appointments, load_documentation
-from bh_doc_validator.persistence import RunRecord, SQLiteRunRepository
+from bh_doc_validator.persistence import (
+    SCHEMA_VERSION,
+    RunRecord,
+    SQLiteRunRepository,
+)
 from bh_doc_validator.service import ValidationRunService, validate_batch
 
 
@@ -54,8 +60,47 @@ def test_database_initialization_is_idempotent(tmp_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert version == 1
+    assert version == SCHEMA_VERSION
     assert {"validation_runs", "validation_results"}.issubset(tables)
+
+
+def test_v1_database_migrates_without_losing_run_or_results(
+    tmp_path: Path, project_root: Path
+) -> None:
+    _, _, batch = sample_batch(project_root)
+    run = make_run(batch)
+    database_path = tmp_path / "migration.sqlite3"
+    repository = SQLiteRunRepository(database_path)
+    repository.initialize()
+    repository.save_run(run, batch.detailed)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("DROP INDEX idx_validation_runs_idempotency_key")
+        connection.execute(
+            "ALTER TABLE validation_runs DROP COLUMN request_fingerprint"
+        )
+        connection.execute("ALTER TABLE validation_runs DROP COLUMN idempotency_key")
+        connection.execute("PRAGMA user_version = 1")
+
+    migrated = SQLiteRunRepository(database_path)
+    migrated.initialize()
+    result_total, results = migrated.get_results(run.run_id, limit=100, offset=0)
+
+    with sqlite3.connect(database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(validation_runs)")
+        }
+        stored_idempotency = connection.execute(
+            "SELECT idempotency_key, request_fingerprint FROM validation_runs"
+        ).fetchone()
+
+    assert version == SCHEMA_VERSION
+    assert {"idempotency_key", "request_fingerprint"}.issubset(columns)
+    assert migrated.get_run(run.run_id) == run
+    assert result_total == batch.result_count
+    assert results == batch.detailed.to_dict(orient="records")
+    assert stored_idempotency == (None, None)
 
 
 def test_sample_run_round_trips_and_exceptions_are_filtered(
@@ -125,6 +170,47 @@ def test_persistence_transaction_rolls_back_partial_run(
     assert repository.count_runs() == 0
     with pytest.raises(RunNotFoundError):
         repository.get_run(run.run_id)
+
+
+def test_concurrent_idempotent_writes_create_one_complete_run(
+    tmp_path: Path, project_root: Path
+) -> None:
+    _, _, batch = sample_batch(project_root)
+    repository = SQLiteRunRepository(tmp_path / "validator.sqlite3")
+    repository.initialize()
+    candidates = [make_run(batch), make_run(batch)]
+    barrier = Barrier(2)
+
+    def save(candidate: RunRecord) -> tuple[RunRecord, bool]:
+        barrier.wait()
+        return repository.save_run_idempotently(
+            candidate,
+            batch.detailed,
+            idempotency_key="n8n-concurrent-retry",
+            request_fingerprint="a" * 64,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(save, candidates))
+
+    stored_ids = {outcome[0].run_id for outcome in outcomes}
+    replay_flags = {outcome[1] for outcome in outcomes}
+    stored_run = repository.get_run(next(iter(stored_ids)))
+    result_total, _ = repository.get_results(
+        stored_run.run_id, limit=100, offset=0
+    )
+
+    assert len(stored_ids) == 1
+    assert replay_flags == {False, True}
+    assert repository.count_runs() == 1
+    assert result_total == batch.result_count
+
+    with sqlite3.connect(repository.database_path) as connection:
+        key, fingerprint = connection.execute(
+            "SELECT idempotency_key, request_fingerprint FROM validation_runs"
+        ).fetchone()
+    assert key == "n8n-concurrent-retry"
+    assert fingerprint == "a" * 64
 
 
 def test_empty_batch_is_persisted_with_zero_counts(

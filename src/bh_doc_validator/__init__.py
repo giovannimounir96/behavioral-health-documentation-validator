@@ -5,4 +5,4 @@ from .pipeline import PipelineResult, run_pipeline
 from .validation import validate_records
 
 __all__ = ["PipelineResult", "ValidationConfig", "run_pipeline", "validate_records"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

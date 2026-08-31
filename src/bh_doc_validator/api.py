@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from hashlib import sha256
+import json
 import logging
 import os
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import FastAPI, Query, Request, Response, status
+from fastapi import FastAPI, Header, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import pandas as pd
@@ -24,6 +26,7 @@ from .api_models import (
 )
 from .exceptions import (
     ConfigurationError,
+    IdempotencyConflictError,
     InputDataError,
     PersistenceError,
     RunNotFoundError,
@@ -44,6 +47,25 @@ DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data/local/validator.sqlite3"
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config/validation_rules.json"
 PageLimit = Annotated[int, Query(ge=1, le=200)]
 PageOffset = Annotated[int, Query(ge=0)]
+IdempotencyKey = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        description=(
+            "Optional retry key. Reusing it with the same JSON request replays "
+            "the completed run; reusing it with different JSON returns 409."
+        ),
+    ),
+]
+IDEMPOTENCY_RESPONSE_HEADER = {
+    "Idempotency-Replayed": {
+        "description": "true when this response replays an existing completed run",
+        "schema": {"type": "string", "enum": ["true", "false"]},
+    }
+}
 
 
 def create_app(
@@ -64,7 +86,7 @@ def create_app(
 
     application = FastAPI(
         title="Behavioral Health Documentation Validator API",
-        version="0.2.0",
+        version="0.3.0",
         description=(
             "Portfolio-safe local API for deterministic validation of synthetic "
             "appointment and documentation records."
@@ -112,6 +134,16 @@ def _register_error_handlers(application: FastAPI) -> None:
         return _error_response(
             status.HTTP_404_NOT_FOUND,
             "RUN_NOT_FOUND",
+            str(exc),
+        )
+
+    @application.exception_handler(IdempotencyConflictError)
+    async def idempotency_conflict(
+        _: Request, exc: IdempotencyConflictError
+    ) -> JSONResponse:
+        return _error_response(
+            status.HTTP_409_CONFLICT,
+            "IDEMPOTENCY_CONFLICT",
             str(exc),
         )
 
@@ -166,20 +198,52 @@ def _register_routes(
         response_model=RunResponse,
         status_code=status.HTTP_201_CREATED,
         responses={
+            200: {
+                "model": RunResponse,
+                "description": "A matching completed run was replayed.",
+                "headers": IDEMPOTENCY_RESPONSE_HEADER,
+            },
+            201: {
+                "description": "A validation run was created.",
+                "headers": IDEMPOTENCY_RESPONSE_HEADER,
+            },
+            409: {"model": ErrorResponse},
             422: {"model": ErrorResponse},
             500: {"model": ErrorResponse},
             503: {"model": ErrorResponse},
         },
         tags=["validation runs"],
     )
-    def create_run(request_body: CreateRunRequest, response: Response) -> RunResponse:
+    def create_run(
+        request_body: CreateRunRequest,
+        response: Response,
+        idempotency_key: IdempotencyKey = None,
+    ) -> RunResponse:
         appointments = _appointments_frame(request_body)
         documentation = _documentation_frame(request_body)
-        run = service.create_run(
-            appointments,
-            documentation,
-            source=request_body.source,
-        )
+        if idempotency_key is None:
+            run = service.create_run(
+                appointments,
+                documentation,
+                source=request_body.source,
+            )
+        else:
+            creation = service.create_run_idempotently(
+                appointments,
+                documentation,
+                source=request_body.source,
+                idempotency_key=idempotency_key,
+                request_fingerprint=_request_fingerprint(request_body),
+            )
+            run = creation.run
+            response.status_code = (
+                status.HTTP_200_OK
+                if creation.replayed
+                else status.HTTP_201_CREATED
+            )
+            response.headers["Idempotency-Replayed"] = str(
+                creation.replayed
+            ).lower()
         response.headers["Location"] = f"/api/v1/runs/{run.run_id}"
         return _run_response(run)
 
@@ -285,6 +349,16 @@ def _documentation_frame(request_body: CreateRunRequest) -> pd.DataFrame:
 
 def _run_response(run: RunRecord) -> RunResponse:
     return RunResponse.model_validate(run.to_dict())
+
+
+def _request_fingerprint(request_body: CreateRunRequest) -> str:
+    canonical_json = json.dumps(
+        request_body.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 def _result_list_response(

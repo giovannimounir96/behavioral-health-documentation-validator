@@ -31,6 +31,14 @@ class ValidationBatch:
     rules_version: str
 
 
+@dataclass(frozen=True)
+class RunCreation:
+    """Outcome of an idempotent creation attempt."""
+
+    run: RunRecord
+    replayed: bool
+
+
 def validate_batch(
     appointments: pd.DataFrame,
     documentation: pd.DataFrame,
@@ -75,20 +83,52 @@ class ValidationRunService:
     ) -> RunRecord:
         config = ValidationConfig.from_file(self.config_path)
         batch = validate_batch(appointments, documentation, config)
-        run = RunRecord(
-            run_id=str(uuid4()),
-            created_at=_utc_now(),
-            source=source,
-            rules_version=batch.rules_version,
-            appointment_count=batch.appointment_count,
-            documentation_count=batch.documentation_count,
-            result_count=batch.result_count,
-            valid_count=batch.valid_count,
-            exception_count=batch.exception_count,
-            review_count=batch.review_count,
-        )
+        run = _new_run(batch, source=source)
         self.repository.save_run(run, batch.detailed)
         return run
+
+    def create_run_idempotently(
+        self,
+        appointments: pd.DataFrame,
+        documentation: pd.DataFrame,
+        *,
+        source: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> RunCreation:
+        """Return a prior matching run or atomically persist a new keyed run."""
+
+        existing = self.repository.get_run_by_idempotency_key(
+            idempotency_key, request_fingerprint
+        )
+        if existing is not None:
+            return RunCreation(run=existing, replayed=True)
+
+        config = ValidationConfig.from_file(self.config_path)
+        batch = validate_batch(appointments, documentation, config)
+        candidate = _new_run(batch, source=source)
+        run, replayed = self.repository.save_run_idempotently(
+            candidate,
+            batch.detailed,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
+        return RunCreation(run=run, replayed=replayed)
+
+
+def _new_run(batch: ValidationBatch, *, source: str) -> RunRecord:
+    return RunRecord(
+        run_id=str(uuid4()),
+        created_at=_utc_now(),
+        source=source,
+        rules_version=batch.rules_version,
+        appointment_count=batch.appointment_count,
+        documentation_count=batch.documentation_count,
+        result_count=batch.result_count,
+        valid_count=batch.valid_count,
+        exception_count=batch.exception_count,
+        review_count=batch.review_count,
+    )
 
 
 def _utc_now() -> str:

@@ -19,3 +19,7 @@ class PersistenceError(ValidatorError):
 
 class RunNotFoundError(ValidatorError):
     """Raised when a requested validation run does not exist."""
+
+
+class IdempotencyConflictError(ValidatorError):
+    """Raised when an idempotency key is reused for a different request."""

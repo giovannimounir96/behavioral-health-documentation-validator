@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "behavioral-health-documentation-validator"
-version = "0.2.0"
+version = "0.3.0"
 description = "Portfolio-safe validation and exception reporting for synthetic behavioral-health documentation workflows."
 readme = "README.md"
 requires-python = ">=3.11"

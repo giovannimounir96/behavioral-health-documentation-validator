@@ -58,6 +58,42 @@ Example `201 Created` response:
 The response is intentionally summary-only. Automation can branch on
 `exception_count` and fetch the exception collection only when needed.
 
+## Retry-safe creation with `Idempotency-Key`
+
+Automation clients should add an `Idempotency-Key` header to create-run requests:
+
+```http
+POST /api/v1/runs
+Content-Type: application/json
+Idempotency-Key: n8n-phase3:portfolio-job-001
+```
+
+The key is optional to preserve the Phase 2 contract. Without it, every valid
+POST intentionally creates a new UUID. With it:
+
+| Request | Status | Result |
+|---|---:|---|
+| First use of key and JSON | `201` | New run; `Idempotency-Replayed: false` |
+| Same key and normalized JSON | `200` | Original run and UUID; `Idempotency-Replayed: true` |
+| Same key and different JSON | `409` | `IDEMPOTENCY_CONFLICT`; no new run |
+
+Keys contain 1–128 characters, begin with an alphanumeric character, and may
+otherwise contain alphanumerics, `.`, `_`, `:`, or `-`. A UUID, source event ID,
+or workflow/job ID is appropriate. The client must create the key once before a
+retrying HTTP node starts; timestamps or randomness generated per attempt defeat
+the protection.
+
+The server fingerprints the normalized Pydantic request with SHA-256. JSON
+whitespace and object-key order therefore do not create false conflicts, while
+array order remains meaningful because it controls stable result order. The key
+and fingerprint are stored only with a completed run. Validation, configuration,
+or rolled-back persistence failures do not reserve the key.
+
+SQLite schema version 2 enforces key uniqueness with a partial unique index. A
+keyed write checks and inserts within one transaction, so simultaneous retries
+cannot create two runs. Existing schema-version-1 databases migrate in place;
+their earlier unkeyed rows remain valid with null idempotency fields.
+
 ## Read endpoints
 
 - `GET /api/v1/runs?limit=50&offset=0`
@@ -89,6 +125,7 @@ All handled errors use a stable envelope:
 | `422` | `REQUEST_VALIDATION_ERROR` | JSON shape, type, or UUID path is invalid |
 | `422` | `INPUT_DATA_ERROR` | JSON is well formed but violates the shared data contract |
 | `404` | `RUN_NOT_FOUND` | A valid UUID has no persisted run |
+| `409` | `IDEMPOTENCY_CONFLICT` | The key already belongs to different normalized JSON |
 | `500` | `CONFIGURATION_ERROR` | The server-owned rule file is missing or invalid |
 | `500` | `INTERNAL_ERROR` | An unexpected server error occurred |
 | `503` | `PERSISTENCE_UNAVAILABLE` | SQLite could not safely read or write the run |
@@ -103,11 +140,14 @@ database paths and tracebacks are never returned.
 The intended flow is:
 
 ```text
-synthetic source → transform to JSON → POST /api/v1/runs
-                 → branch on exception_count
-                 → GET /exceptions when count > 0
-                 → human review task or local notification
+manual/webhook trigger → choose synthetic scenario + stable job key
+                       → POST /api/v1/runs
+                       → store run_id
+                       → GET /results and GET /exceptions
+                       → branch on exceptions and requires_review
+                       → operational summary or human-review notification
 ```
 
-Before retry behavior is enabled, Phase 3 should add an idempotency or workflow
-execution key so a retried POST cannot silently create a duplicate run.
+The exported workflow always supplies a key, uses three bounded HTTP attempts,
+and routes terminal API failures to a failed n8n execution. See
+[`n8n-workflow.md`](n8n-workflow.md) for the complete node-by-node contract.

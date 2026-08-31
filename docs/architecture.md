@@ -11,6 +11,7 @@ flowchart TB
     subgraph Input adapters
         A["CSV loader / CLI"]
         B["FastAPI / Pydantic JSON"]
+        N["n8n Manual / Webhook trigger"]
     end
 
     subgraph Core
@@ -24,15 +25,18 @@ flowchart TB
         G["Three CSV reports"]
         H["SQLite repository"]
         I["REST JSON responses"]
+        R["n8n summaries / review notification"]
     end
 
     J["Server-owned validation_rules.json"] --> E
     A --> C
+    N --> B
     B --> C
     C --> D --> E --> F
     F --> G
     F --> H --> I
     H --> B
+    I --> N --> R
 ```
 
 ## Component responsibilities
@@ -46,9 +50,10 @@ flowchart TB
 | `service.py` | Run shared in-memory validation and persist completed API runs | Reimplement deterministic rules |
 | `pipeline.py` | Preserve the Phase 1 CSV-output workflow | Depend on FastAPI or SQLite |
 | `cli.py` | Expose a reproducible user entry point and useful logs | Contain validation logic |
-| `persistence.py` | Own schema version 1, transactions, history, and result queries | Store raw inputs or duplicate exceptions |
+| `persistence.py` | Own schema version 2, migration, atomic idempotency, history, and result queries | Store raw inputs or duplicate exceptions |
 | `api_models.py` | Define typed request/response JSON contracts | Perform pandas or SQL work |
-| `api.py` | Map HTTP requests, responses, and errors onto the service/repository | Accept server file paths or change policy rules |
+| `api.py` | Map HTTP requests, idempotency headers, responses, and errors onto the service/repository | Accept server file paths or change policy rules |
+| n8n workflow | Trigger, move JSON, retain `run_id`, retrieve results, branch, notify, retry, and expose failures | Apply or modify validation rules |
 
 ## Key design decisions
 
@@ -93,14 +98,16 @@ those frames to files; the API adapter stores the detailed frame in SQLite.
 
 ### Minimal relational persistence
 
-SQLite schema version 1 has two tables:
+SQLite schema version 2 has two tables:
 
 ```text
 validation_runs (one row per completed UUID run)
     └── validation_results (ordered detailed rows for that run)
 ```
 
-`validation_runs` stores UTC creation time, source, rules version, and counts.
+`validation_runs` stores UTC creation time, source, rules version, counts, and
+nullable idempotency key/fingerprint fields. Existing schema-version-1 databases
+migrate in place, leaving older rows unkeyed.
 `validation_results` stores all 18 Phase 1 detailed-result fields with a foreign
 key and stable order. Exceptions are ordinary persisted results selected with
 `is_exception = 1`; a second exception table would duplicate state.
@@ -108,6 +115,20 @@ key and stable order. Exceptions are ordinary persisted results selected with
 Input validation and deterministic evaluation finish before the database write.
 One short transaction inserts the run and all results. An error rolls back both,
 so history can never contain a partially written completed run.
+
+### Idempotency at the state-changing boundary
+
+Idempotency belongs to the API/service/repository boundary rather than the rule
+engine. The n8n client sends one stable key for a logical job. FastAPI computes a
+canonical SHA-256 fingerprint of the normalized JSON request. SQLite's partial
+unique index permits many historical null keys but only one completed run per
+supplied key.
+
+A preliminary lookup makes ordinary replays cheap. The definitive check and
+insert still occur atomically in a write transaction, which closes the race
+between simultaneous retries. Same-key/same-fingerprint requests return the
+persisted run; same-key/different-fingerprint requests fail with `409`. Failed
+validation and rolled-back writes never reserve a key.
 
 ### Synchronous local API
 
@@ -120,6 +141,32 @@ local workload.
 The API accepts inline JSON arrays rather than local file paths. That boundary is
 portable to n8n and avoids arbitrary server file access. Rules remain server
 owned, and the supported launch command binds to localhost during this phase.
+
+### n8n is an orchestration adapter
+
+The exported n8n workflow has Manual and Webhook triggers, prepares one of three
+small synthetic JSON scenarios, calls the API, stores the returned UUID, retrieves
+persisted results/exceptions, and branches first on exceptions and then on
+`requires_review`. It produces explicit success, deterministic-follow-up, or
+human-review-notification summaries.
+
+Every HTTP node has three bounded attempts and a separate error output leading to
+a deliberately failed execution. The POST key is calculated before retries. The
+workflow never calculates an outcome, edits a rule result, or adds AI judgment.
+
+```mermaid
+flowchart TD
+    T["Manual trigger / POST webhook"] --> N["n8n synthetic JSON + stable key"]
+    N --> P["POST validation run"] --> API["FastAPI"]
+    API --> V["Deterministic validator"] --> DB["SQLite"]
+    DB --> G["GET results + exceptions"] --> E{"Exceptions?"}
+    E -- "No" --> S["Success"]
+    E -- "Yes" --> H{"requires_review?"}
+    H -- "No" --> D["Deterministic follow-up"]
+    H -- "Yes" --> Q["Human-review notification"] --> U["Reviewer"]
+    P -. "Retries exhausted" .-> F["Failed execution"]
+    G -. "Retries exhausted" .-> F
+```
 
 ## MVP acceptance criteria
 
@@ -150,6 +197,26 @@ Phase 2 is complete when:
 
 All eight criteria are currently met.
 
+## Phase 3 acceptance criteria
+
+Phase 3 is complete when:
+
+1. keyed `POST /api/v1/runs` requests replay the original run safely, reject a
+   changed payload with `409`, and remain race-safe under concurrent retries;
+2. the exported workflow has a manual trigger and a webhook trigger;
+3. n8n sends synthetic JSON, retains `run_id`, and retrieves persisted results
+   and exceptions through the API;
+4. exception and `requires_review` branches produce explicit operational and
+   human-review paths;
+5. HTTP failures use bounded retries and a visible failed-execution path;
+6. the workflow uses no credentials, PHI, paid service, or LLM;
+7. static workflow tests, the complete Python suite, and live local end-to-end
+   scenarios pass; and
+8. the workflow, diagrams, API contract, and portfolio notes are committed with
+   the implementation.
+
+All eight criteria are currently met.
+
 ## Phased development plan
 
 ### Phase 1 — trusted rule engine (complete)
@@ -169,12 +236,13 @@ and consistent error handling. Retain CSV as a separate working adapter.
 Professional value: relational modeling, SQL transactions, repository patterns,
 REST/HTTP, JSON schemas, dependency boundaries, and API testing.
 
-### Phase 3 — n8n automation integration
+### Phase 3 — n8n automation integration (complete)
 
-Create an n8n workflow that transforms a synthetic input, invokes the existing
-API, branches on `exception_count`, retrieves exception details, and creates a
-local/demo notification or human-review task. Add an idempotency key before
-enabling retry behavior, then commit the n8n JSON export.
+Add a retry-safe idempotency boundary and an exported n8n workflow that
+transforms synthetic input, invokes the existing API, retrieves persisted
+results/exceptions, branches on exceptions and review requirements, and creates
+an explicit local human-review notification path. Keep all outcomes owned by
+the deterministic validator.
 
 Professional value: APIs, HTTP/JSON, orchestration, branching, retry/error paths,
 and integration testing.
@@ -193,6 +261,6 @@ communication.
 
 The MVP intentionally avoids microservices, Postgres, an ORM, queues, React,
 Kubernetes, fuzzy identity matching, FHIR simulation, authentication claims, and
-LLM-based validation. SQLite uses schema versioning without Alembic because only
-schema version 1 exists. Those technologies can be added only after a concrete
-requirement earns their complexity.
+LLM-based validation. SQLite uses a small in-code migration because the project
+has only one prior schema version. Those technologies can be added only after a
+concrete requirement earns their complexity.

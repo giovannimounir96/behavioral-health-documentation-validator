@@ -1,0 +1,436 @@
+{
+  "id": "bhValidationPhase3",
+  "name": "Behavioral Health Validation - Phase 3",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "10000000-0000-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-1120, -160]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "behavioral-health-validation",
+        "responseMode": "onReceived",
+        "options": {
+          "responseCode": {
+            "values": {
+              "responseCode": "customCode",
+              "customCode": 202
+            }
+          },
+          "responseData": "={{ JSON.stringify({ status: 'accepted', execution_id: $execution.id }) }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "10000000-0000-4000-8000-000000000002",
+      "name": "Validation Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-1120, 20],
+      "webhookId": "20000000-0000-4000-8000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "const incoming = $input.first().json;\nconst headerKey = incoming.headers?.['idempotency-key'];\nconst jobId = incoming.body?.job_id;\nconst scenario = incoming.body?.scenario ?? 'review';\n\nif (!['review', 'clean', 'deterministic_exception'].includes(scenario)) {\n  throw new Error('scenario must be review, clean, or deterministic_exception.');\n}\n\nconst idempotencyKey = headerKey ?? (jobId ? `n8n-phase3:${jobId}` : `n8n-phase3:synthetic-${scenario}-v1`);\nif (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(idempotencyKey)) {\n  throw new Error('The Idempotency-Key or job_id contains unsupported characters or is too long.');\n}\n\nconst scenarios = {\n  review: {\n    source: 'n8n-phase3-review',\n    appointments: [\n      { appointment_id: 'APT-AUTO-001', patient_id: 'PAT-AUTO-001', provider_id: 'PROV-AUTO-01', appointment_date: '2026-08-01', appointment_time: '09:00', service_type: 'Therapy Follow-up', appointment_status: 'Completed' },\n      { appointment_id: 'APT-AUTO-002', patient_id: 'PAT-AUTO-002', provider_id: 'PROV-AUTO-01', appointment_date: '2026-08-01', appointment_time: '10:00', service_type: 'Medication Management', appointment_status: 'Completed' },\n      { appointment_id: 'APT-AUTO-003', patient_id: 'PAT-AUTO-003', provider_id: 'PROV-AUTO-02', appointment_date: '2026-08-02', appointment_time: '11:00', service_type: 'Initial Assessment', appointment_status: 'Completed' },\n      { appointment_id: 'APT-AUTO-004', patient_id: 'PAT-AUTO-004', provider_id: 'PROV-AUTO-02', appointment_date: '2026-08-02', appointment_time: '13:00', service_type: 'Therapy Follow-up', appointment_status: 'Cancelled' }\n    ],\n    documentation: [\n      { note_id: 'NOTE-AUTO-001', appointment_id: 'APT-AUTO-001', patient_id: 'PAT-AUTO-001', provider_id: 'PROV-AUTO-01', note_date: '2026-08-01', note_status: 'Signed', note_type: 'Progress Note', signed_date: '2026-08-01' },\n      { note_id: 'NOTE-AUTO-003', appointment_id: 'APT-AUTO-003', patient_id: 'PAT-AUTO-003', provider_id: 'PROV-AUTO-99', note_date: '2026-08-02', note_status: 'Signed', note_type: 'Assessment Note', signed_date: '2026-08-02' }\n    ]\n  },\n  clean: {\n    source: 'n8n-phase3-clean',\n    appointments: [\n      { appointment_id: 'APT-AUTO-CLEAN-001', patient_id: 'PAT-AUTO-CLEAN-001', provider_id: 'PROV-AUTO-01', appointment_date: '2026-08-03', appointment_time: '09:00', service_type: 'Therapy Follow-up', appointment_status: 'Completed' }\n    ],\n    documentation: [\n      { note_id: 'NOTE-AUTO-CLEAN-001', appointment_id: 'APT-AUTO-CLEAN-001', patient_id: 'PAT-AUTO-CLEAN-001', provider_id: 'PROV-AUTO-01', note_date: '2026-08-03', note_status: 'Signed', note_type: 'Progress Note', signed_date: '2026-08-03' }\n    ]\n  },\n  deterministic_exception: {\n    source: 'n8n-phase3-deterministic-exception',\n    appointments: [\n      { appointment_id: 'APT-AUTO-MISSING-001', patient_id: 'PAT-AUTO-MISSING-001', provider_id: 'PROV-AUTO-02', appointment_date: '2026-08-04', appointment_time: '10:00', service_type: 'Medication Management', appointment_status: 'Completed' }\n    ],\n    documentation: []\n  }\n};\n\nreturn [{ json: { api_base_url: 'http://127.0.0.1:8000', idempotency_key: idempotencyKey, scenario, validation_request: scenarios[scenario] } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000003",
+      "name": "Prepare Synthetic Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-880, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.api_base_url + '/api/v1/runs' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.validation_request }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "10000000-0000-4000-8000-000000000004",
+      "name": "Create Validation Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-620, -80],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst prepared = $('Prepare Synthetic Request').first().json;\nconst run = response.body;\n\nif (!run?.run_id) {\n  throw new Error('The API response did not contain a run_id.');\n}\n\nreturn [{ json: { api_base_url: prepared.api_base_url, idempotency_key: prepared.idempotency_key, create_status_code: response.statusCode, idempotency_replayed: String(response.headers?.['idempotency-replayed']).toLowerCase() === 'true', ...run } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000005",
+      "name": "Store Run Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-360, -80]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.api_base_url + '/api/v1/runs/' + $json.run_id + '/results?limit=200&offset=0' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "10000000-0000-4000-8000-000000000006",
+      "name": "Fetch Persisted Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-100, -80],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const run = $('Store Run Context').first().json;\nconst response = $input.first().json;\n\nreturn [{ json: { ...run, results_total: response.total, results: response.items ?? [] } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000007",
+      "name": "Store Results Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, -80]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.api_base_url + '/api/v1/runs/' + $json.run_id + '/exceptions?limit=200&offset=0' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "10000000-0000-4000-8000-000000000008",
+      "name": "Fetch Persisted Exceptions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [420, -80],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const context = $('Store Results Context').first().json;\nconst response = $input.first().json;\nconst exceptions = response.items ?? [];\n\nreturn [{ json: { ...context, exceptions_total: response.total, exceptions, review_items: exceptions.filter(item => item.requires_review === true) } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000009",
+      "name": "Assemble Workflow Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, -80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "30000000-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.exceptions_total }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "10000000-0000-4000-8000-000000000010",
+      "name": "Any Exceptions?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [940, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: { operational_status: 'SUCCESS_NO_EXCEPTIONS', run_id: data.run_id, idempotency_key: data.idempotency_key, idempotency_replayed: data.idempotency_replayed, create_status_code: data.create_status_code, counts: { appointments: data.appointment_count, documentation: data.documentation_count, results: data.results_total, exceptions: 0, human_review_cases: 0 }, message: 'Validation completed with no exceptions.', deterministic_results_unchanged: true } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000011",
+      "name": "Build Clean Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "30000000-0000-4000-8000-000000000002",
+              "leftValue": "={{ $json.review_items.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "10000000-0000-4000-8000-000000000012",
+      "name": "Any Human Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1200, -160]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nreturn [{ json: { operational_status: 'EXCEPTIONS_ROUTED_NO_HUMAN_REVIEW', run_id: data.run_id, idempotency_key: data.idempotency_key, idempotency_replayed: data.idempotency_replayed, create_status_code: data.create_status_code, counts: { appointments: data.appointment_count, documentation: data.documentation_count, results: data.results_total, exceptions: data.exceptions_total, human_review_cases: 0 }, exception_cases: data.exceptions, message: 'Deterministic exceptions were routed for operational follow-up; no ambiguous case requires human review.', deterministic_results_unchanged: true } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000013",
+      "name": "Build Exception Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1460, 20]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst reviewCases = data.review_items.map(item => ({ record_type: item.record_type, appointment_id: item.appointment_id, provider_id: item.provider_id, rule_code: item.rule_code, issue_codes: item.issue_codes, reason: item.reason }));\n\nreturn [{ json: { operational_status: 'AWAITING_HUMAN_REVIEW', run_id: data.run_id, idempotency_key: data.idempotency_key, idempotency_replayed: data.idempotency_replayed, create_status_code: data.create_status_code, counts: { appointments: data.appointment_count, documentation: data.documentation_count, results: data.results_total, exceptions: data.exceptions_total, human_review_cases: reviewCases.length }, notification: { channel: 'n8n_execution_output', message: `Run ${data.run_id} has ${reviewCases.length} case(s) requiring human review. Open this execution and inspect review_cases.` }, review_cases: reviewCases, non_review_exception_count: data.exceptions_total - reviewCases.length, deterministic_results_unchanged: true } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000014",
+      "name": "Prepare Human Review Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1460, -260]
+    },
+    {
+      "parameters": {
+        "jsCode": "const failure = $input.first().json;\nconst raw = failure.error?.message ?? failure.error ?? failure.message;\nconst errorMessage = typeof raw === 'string' ? raw : 'HTTP request failed after retry attempts.';\nreturn [{ json: { operational_status: 'FAILED', failed_step: 'create_run', run_id: null, idempotency_key: $('Prepare Synthetic Request').first().json.idempotency_key, error_message: errorMessage } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000015",
+      "name": "Mark Create Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-360, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const failure = $input.first().json;\nconst raw = failure.error?.message ?? failure.error ?? failure.message;\nconst errorMessage = typeof raw === 'string' ? raw : 'HTTP request failed after retry attempts.';\nreturn [{ json: { operational_status: 'FAILED', failed_step: 'fetch_results', run_id: $('Store Run Context').first().json.run_id, idempotency_key: $('Store Run Context').first().json.idempotency_key, error_message: errorMessage } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000016",
+      "name": "Mark Results Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const failure = $input.first().json;\nconst raw = failure.error?.message ?? failure.error ?? failure.message;\nconst errorMessage = typeof raw === 'string' ? raw : 'HTTP request failed after retry attempts.';\nreturn [{ json: { operational_status: 'FAILED', failed_step: 'fetch_exceptions', run_id: $('Store Results Context').first().json.run_id, idempotency_key: $('Store Results Context').first().json.idempotency_key, error_message: errorMessage } }];"
+      },
+      "id": "10000000-0000-4000-8000-000000000017",
+      "name": "Mark Exceptions Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "errorType": "errorMessage",
+        "errorMessage": "={{ $json.failed_step + ' failed after retries: ' + $json.error_message }}"
+      },
+      "id": "10000000-0000-4000-8000-000000000018",
+      "name": "Stop with Operational Error",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [940, 300]
+    },
+    {
+      "parameters": {
+        "content": "## 1. Trigger and synthetic JSON\nRun manually for a portfolio demo, or publish the workflow and POST `{ \"job_id\": \"your-stable-job-id\" }` to the webhook. The job ID becomes the retry-safe idempotency key.",
+        "height": 250,
+        "width": 500,
+        "color": 5
+      },
+      "id": "10000000-0000-4000-8000-000000000019",
+      "name": "Trigger Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1160, -500]
+    },
+    {
+      "parameters": {
+        "content": "## 2. API calls and persistence\nThe POST sends JSON plus `Idempotency-Key`; the two GET calls retrieve the exact rows persisted by FastAPI in SQLite. Each HTTP node makes at most three attempts and routes final failures to a visible failed execution.",
+        "height": 250,
+        "width": 740,
+        "color": 3
+      },
+      "id": "10000000-0000-4000-8000-000000000020",
+      "name": "API Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-640, -500]
+    },
+    {
+      "parameters": {
+        "content": "## 3. Deterministic routing\nFirst branch on whether exceptions exist, then on `requires_review`. n8n never changes rule results; it only routes the validator's persisted output.",
+        "height": 250,
+        "width": 500,
+        "color": 4
+      },
+      "id": "10000000-0000-4000-8000-000000000021",
+      "name": "Routing Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [680, -500]
+    },
+    {
+      "parameters": {
+        "content": "## 4. Human review notification\nAmbiguous cases become a compact review packet in the local n8n execution output. A reviewer inspects this packet; a later integration can replace the local notification with email, Slack, or a ticket without changing the validator.",
+        "height": 250,
+        "width": 500,
+        "color": 6
+      },
+      "id": "10000000-0000-4000-8000-000000000022",
+      "name": "Review Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1220, -500]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{"node": "Prepare Synthetic Request", "type": "main", "index": 0}]]
+    },
+    "Validation Webhook": {
+      "main": [[{"node": "Prepare Synthetic Request", "type": "main", "index": 0}]]
+    },
+    "Prepare Synthetic Request": {
+      "main": [[{"node": "Create Validation Run", "type": "main", "index": 0}]]
+    },
+    "Create Validation Run": {
+      "main": [
+        [{"node": "Store Run Context", "type": "main", "index": 0}],
+        [{"node": "Mark Create Failure", "type": "main", "index": 0}]
+      ]
+    },
+    "Store Run Context": {
+      "main": [[{"node": "Fetch Persisted Results", "type": "main", "index": 0}]]
+    },
+    "Fetch Persisted Results": {
+      "main": [
+        [{"node": "Store Results Context", "type": "main", "index": 0}],
+        [{"node": "Mark Results Failure", "type": "main", "index": 0}]
+      ]
+    },
+    "Store Results Context": {
+      "main": [[{"node": "Fetch Persisted Exceptions", "type": "main", "index": 0}]]
+    },
+    "Fetch Persisted Exceptions": {
+      "main": [
+        [{"node": "Assemble Workflow Context", "type": "main", "index": 0}],
+        [{"node": "Mark Exceptions Failure", "type": "main", "index": 0}]
+      ]
+    },
+    "Assemble Workflow Context": {
+      "main": [[{"node": "Any Exceptions?", "type": "main", "index": 0}]]
+    },
+    "Any Exceptions?": {
+      "main": [
+        [{"node": "Any Human Review?", "type": "main", "index": 0}],
+        [{"node": "Build Clean Summary", "type": "main", "index": 0}]
+      ]
+    },
+    "Any Human Review?": {
+      "main": [
+        [{"node": "Prepare Human Review Notification", "type": "main", "index": 0}],
+        [{"node": "Build Exception Summary", "type": "main", "index": 0}]
+      ]
+    },
+    "Mark Create Failure": {
+      "main": [[{"node": "Stop with Operational Error", "type": "main", "index": 0}]]
+    },
+    "Mark Results Failure": {
+      "main": [[{"node": "Stop with Operational Error", "type": "main", "index": 0}]]
+    },
+    "Mark Exceptions Failure": {
+      "main": [[{"node": "Stop with Operational Error", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "40000000-0000-4000-8000-000000000001",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
