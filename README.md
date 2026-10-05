@@ -1,5 +1,7 @@
 # Behavioral Health Documentation Validator
 
+[![Tests](https://github.com/giovannimounir96/behavioral-health-documentation-validator/actions/workflows/tests.yml/badge.svg)](https://github.com/giovannimounir96/behavioral-health-documentation-validator/actions/workflows/tests.yml)
+
 A portfolio-safe Python automation service that compares **synthetic**
 behavioral-health appointment and documentation records, applies configurable
 deterministic rules, persists validation history, and exposes auditable results
@@ -120,7 +122,7 @@ Intentionally deferred:
 
 - a dashboard and reviewer disposition workflow;
 - optional AI summaries that never alter deterministic results;
-- CI, screenshots, and optional Docker packaging.
+- screenshots and optional Docker packaging.
 
 ## Quick start
 
@@ -322,6 +324,9 @@ Run all tests:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+GitHub Actions runs this same suite on Python 3.11 and 3.13 for every push and
+pull request.
+
 Current verified result:
 
 ```text
@@ -375,7 +380,7 @@ the phased evolution plan.
 ## Roadmap
 
 1. **Phase 4 — dashboard and portfolio polish:** add a lightweight run/exception
-   dashboard, CI, screenshots, and optional packaging improvements.
+   dashboard, screenshots, and optional packaging improvements.
 2. **Later optional AI:** summarize exceptions or suggest review priority using
    persisted deterministic evidence. AI will never create or overwrite the
    source-of-truth validation result.
