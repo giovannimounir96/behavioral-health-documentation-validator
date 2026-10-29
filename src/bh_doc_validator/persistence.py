@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any
 
@@ -18,7 +19,8 @@ from .exceptions import (
 from .validation import DETAIL_COLUMNS
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+_SHA256_HEX = re.compile(r"[0-9a-fA-F]{64}\Z")
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,7 @@ class RunRecord:
     created_at: str
     source: str
     rules_version: str
+    rules_fingerprint: str | None
     appointment_count: int
     documentation_count: int
     result_count: int
@@ -45,7 +48,7 @@ class SQLiteRunRepository:
         self.database_path = Path(database_path)
 
     def initialize(self) -> None:
-        """Create the current schema, migrate v1, or reject newer schemas."""
+        """Create the current schema, migrate earlier versions, or reject newer ones."""
 
         try:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +66,11 @@ class SQLiteRunRepository:
                 elif version == 1:
                     with connection:
                         _migrate_v1_to_v2(connection)
+                        _migrate_v2_to_v3(connection)
+                        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                elif version == 2:
+                    with connection:
+                        _migrate_v2_to_v3(connection)
                         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 elif version != SCHEMA_VERSION:
                     raise PersistenceError(
@@ -130,6 +138,7 @@ class SQLiteRunRepository:
     ) -> tuple[RunRecord, bool]:
         """Persist a run; keyed writes serialize their check-and-insert step."""
 
+        _validate_new_run_fingerprint(run.rules_fingerprint)
         missing_columns = [column for column in DETAIL_COLUMNS if column not in results]
         if missing_columns:
             raise PersistenceError(
@@ -156,16 +165,18 @@ class SQLiteRunRepository:
                         """
                         INSERT INTO validation_runs (
                             run_id, created_at, source, rules_version,
+                            rules_fingerprint,
                             appointment_count, documentation_count, result_count,
                             valid_count, exception_count, review_count,
                             idempotency_key, request_fingerprint
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             run.run_id,
                             run.created_at,
                             run.source,
                             run.rules_version,
+                            run.rules_fingerprint,
                             run.appointment_count,
                             run.documentation_count,
                             run.result_count,
@@ -295,6 +306,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             source TEXT NOT NULL,
             rules_version TEXT NOT NULL,
+            rules_fingerprint TEXT NOT NULL CHECK (length(rules_fingerprint) = 64),
             appointment_count INTEGER NOT NULL CHECK (appointment_count >= 0),
             documentation_count INTEGER NOT NULL CHECK (documentation_count >= 0),
             result_count INTEGER NOT NULL CHECK (result_count >= 0),
@@ -360,6 +372,19 @@ def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
         """
     )
     _create_indexes(connection)
+
+
+def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+    """Add an optional fingerprint while preserving unreconstructable older runs."""
+
+    connection.execute(
+        """
+        ALTER TABLE validation_runs
+        ADD COLUMN rules_fingerprint TEXT CHECK (
+            rules_fingerprint IS NULL OR length(rules_fingerprint) = 64
+        )
+        """
+    )
 
 
 def _create_indexes(connection: sqlite3.Connection) -> None:
@@ -428,6 +453,7 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         created_at=row["created_at"],
         source=row["source"],
         rules_version=row["rules_version"],
+        rules_fingerprint=row["rules_fingerprint"],
         appointment_count=row["appointment_count"],
         documentation_count=row["documentation_count"],
         result_count=row["result_count"],
@@ -435,6 +461,16 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         exception_count=row["exception_count"],
         review_count=row["review_count"],
     )
+
+
+def _validate_new_run_fingerprint(fingerprint: str | None) -> None:
+    """Require newly inserted runs to carry a SHA-256 hexadecimal digest."""
+
+    if not isinstance(fingerprint, str) or _SHA256_HEX.fullmatch(fingerprint) is None:
+        raise PersistenceError(
+            "New validation runs require a 64-character SHA-256 hexadecimal "
+            "rules_fingerprint."
+        )
 
 
 def _matching_idempotent_run(

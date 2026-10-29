@@ -50,6 +50,7 @@ class RunResponse(StrictAPIModel):
     created_at: datetime
     source: str
     rules_version: str
+    rules_fingerprint: str | None
     appointment_count: int
     documentation_count: int
     result_count: int

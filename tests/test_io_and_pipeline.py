@@ -108,6 +108,58 @@ def test_non_string_no_show_policy_is_configuration_error(tmp_path: Path) -> Non
         ValidationConfig.from_file(path)
 
 
+def test_equivalent_effective_configurations_have_a_stable_fingerprint(
+    tmp_path: Path,
+) -> None:
+    source = json.loads(
+        (ROOT / "config/validation_rules.json").read_text(encoding="utf-8")
+    )
+    equivalent = json.loads(json.dumps(source))
+    equivalent["rules_version"] = " 1.0.0 "
+    equivalent["appointment_status_groups"] = {
+        name: list(reversed(values))
+        for name, values in reversed(
+            list(source["appointment_status_groups"].items())
+        )
+    }
+    equivalent["note_status_groups"] = {
+        name: [f"  {value.upper()}  " for value in reversed(values)]
+        for name, values in reversed(list(source["note_status_groups"].items()))
+    }
+    source_path = tmp_path / "source-rules.json"
+    equivalent_path = tmp_path / "equivalent-rules.json"
+    source_path.write_text(json.dumps(source), encoding="utf-8")
+    equivalent_path.write_text(json.dumps(equivalent), encoding="utf-8")
+
+    first = ValidationConfig.from_file(source_path)
+    second = ValidationConfig.from_file(equivalent_path)
+
+    assert first.rules_fingerprint == second.rules_fingerprint
+    assert (
+        first.rules_fingerprint
+        == "979c7f432e0e5f54ef4e93f8f5b8bd0f85db2bfd268e38fa80c98ee1533619d6"
+    )
+
+
+def test_changed_effective_configuration_has_a_different_fingerprint(
+    tmp_path: Path,
+) -> None:
+    source = json.loads(
+        (ROOT / "config/validation_rules.json").read_text(encoding="utf-8")
+    )
+    changed = json.loads(json.dumps(source))
+    changed["date_tolerance_days"] = 2
+    source_path = tmp_path / "source-rules.json"
+    changed_path = tmp_path / "changed-rules.json"
+    source_path.write_text(json.dumps(source), encoding="utf-8")
+    changed_path.write_text(json.dumps(changed), encoding="utf-8")
+
+    assert (
+        ValidationConfig.from_file(source_path).rules_fingerprint
+        != ValidationConfig.from_file(changed_path).rules_fingerprint
+    )
+
+
 def test_empty_batch_reports_keep_stable_headers(tmp_path: Path) -> None:
     appointment_columns = pd.read_csv(
         ROOT / "data/sample/appointments.csv", nrows=0

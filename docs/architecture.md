@@ -98,16 +98,20 @@ those frames to files; the API adapter stores the detailed frame in SQLite.
 
 ### Minimal relational persistence
 
-SQLite schema version 2 has two tables:
+SQLite schema version 3 has two tables:
 
 ```text
 validation_runs (one row per completed UUID run)
     └── validation_results (ordered detailed rows for that run)
 ```
 
-`validation_runs` stores UTC creation time, source, rules version, counts, and
-nullable idempotency key/fingerprint fields. Existing schema-version-1 databases
-migrate in place, leaving older rows unkeyed.
+`validation_runs` stores UTC creation time, source, rules version, the
+SHA-256 fingerprint of the effective normalized configuration, counts, and
+nullable idempotency key/request-fingerprint fields. The effective configuration
+uses trimmed version text, normalized status values, and sorted groups/statuses,
+so presentation-only JSON differences do not change its fingerprint. Version-1
+and version-2 databases migrate in place. Earlier rows retain a null rules
+fingerprint because the historical configuration cannot be recovered reliably.
 `validation_results` stores all 18 Phase 1 detailed-result fields with a foreign
 key and stable order. Exceptions are ordinary persisted results selected with
 `is_exception = 1`; a second exception table would duplicate state.

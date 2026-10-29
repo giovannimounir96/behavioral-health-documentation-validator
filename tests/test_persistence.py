@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 import sqlite3
@@ -34,6 +35,7 @@ def make_run(batch, **overrides) -> RunRecord:
         "created_at": "2026-08-16T12:00:00.000000Z",
         "source": "pytest",
         "rules_version": batch.rules_version,
+        "rules_fingerprint": batch.rules_fingerprint,
         "appointment_count": batch.appointment_count,
         "documentation_count": batch.documentation_count,
         "result_count": batch.result_count,
@@ -77,6 +79,9 @@ def test_v1_database_migrates_without_losing_run_or_results(
     with sqlite3.connect(database_path) as connection:
         connection.execute("DROP INDEX idx_validation_runs_idempotency_key")
         connection.execute(
+            "ALTER TABLE validation_runs DROP COLUMN rules_fingerprint"
+        )
+        connection.execute(
             "ALTER TABLE validation_runs DROP COLUMN request_fingerprint"
         )
         connection.execute("ALTER TABLE validation_runs DROP COLUMN idempotency_key")
@@ -91,16 +96,57 @@ def test_v1_database_migrates_without_losing_run_or_results(
         columns = {
             row[1] for row in connection.execute("PRAGMA table_info(validation_runs)")
         }
-        stored_idempotency = connection.execute(
-            "SELECT idempotency_key, request_fingerprint FROM validation_runs"
+        stored_metadata = connection.execute(
+            "SELECT idempotency_key, request_fingerprint, rules_fingerprint "
+            "FROM validation_runs"
         ).fetchone()
 
     assert version == SCHEMA_VERSION
-    assert {"idempotency_key", "request_fingerprint"}.issubset(columns)
-    assert migrated.get_run(run.run_id) == run
+    assert {
+        "idempotency_key",
+        "request_fingerprint",
+        "rules_fingerprint",
+    }.issubset(columns)
+    assert migrated.get_run(run.run_id) == replace(run, rules_fingerprint=None)
     assert result_total == batch.result_count
     assert results == batch.detailed.to_dict(orient="records")
-    assert stored_idempotency == (None, None)
+    assert stored_metadata == (None, None, None)
+
+
+def test_v2_database_migrates_with_null_legacy_rules_fingerprint(
+    tmp_path: Path, project_root: Path
+) -> None:
+    _, _, batch = sample_batch(project_root)
+    run = make_run(batch)
+    database_path = tmp_path / "v2-migration.sqlite3"
+    repository = SQLiteRunRepository(database_path)
+    repository.initialize()
+    repository.save_run(run, batch.detailed)
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE validation_runs DROP COLUMN rules_fingerprint")
+        connection.execute("PRAGMA user_version = 2")
+
+    migrated = SQLiteRunRepository(database_path)
+    migrated.initialize()
+    new_run = make_run(batch)
+    migrated.save_run(new_run, batch.detailed)
+
+    assert migrated.get_run(run.run_id) == replace(run, rules_fingerprint=None)
+    assert migrated.get_run(new_run.run_id) == new_run
+    with sqlite3.connect(database_path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        legacy_fingerprint = connection.execute(
+            "SELECT rules_fingerprint FROM validation_runs WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0]
+        new_fingerprint = connection.execute(
+            "SELECT rules_fingerprint FROM validation_runs WHERE run_id = ?",
+            (new_run.run_id,),
+        ).fetchone()[0]
+    assert version == SCHEMA_VERSION
+    assert legacy_fingerprint is None
+    assert new_fingerprint == new_run.rules_fingerprint
 
 
 def test_sample_run_round_trips_and_exceptions_are_filtered(
@@ -129,6 +175,50 @@ def test_sample_run_round_trips_and_exceptions_are_filtered(
     assert results == batch.detailed.to_dict(orient="records")
     assert exceptions == batch.exceptions.to_dict(orient="records")
     assert all(record["is_exception"] is True for record in exceptions)
+
+
+def test_service_persists_effective_rules_fingerprint(
+    tmp_path: Path, project_root: Path
+) -> None:
+    appointments, documentation, batch = sample_batch(project_root)
+    repository = SQLiteRunRepository(tmp_path / "validator.sqlite3")
+    repository.initialize()
+    service = ValidationRunService(
+        repository, project_root / "config/validation_rules.json"
+    )
+
+    run = service.create_run(appointments, documentation, source="fingerprint-test")
+
+    assert run.rules_fingerprint == batch.rules_fingerprint
+    assert repository.get_run(run.run_id).rules_fingerprint == batch.rules_fingerprint
+    with sqlite3.connect(repository.database_path) as connection:
+        stored_fingerprint = connection.execute(
+            "SELECT rules_fingerprint FROM validation_runs WHERE run_id = ?",
+            (run.run_id,),
+        ).fetchone()[0]
+    assert stored_fingerprint == batch.rules_fingerprint
+
+
+@pytest.mark.parametrize(
+    "rules_fingerprint",
+    [None, "a" * 63, "g" * 64],
+)
+def test_repository_rejects_missing_or_malformed_rules_fingerprint(
+    tmp_path: Path,
+    project_root: Path,
+    rules_fingerprint: str | None,
+) -> None:
+    _, _, batch = sample_batch(project_root)
+    repository = SQLiteRunRepository(tmp_path / "validator.sqlite3")
+    repository.initialize()
+
+    with pytest.raises(PersistenceError, match="SHA-256 hexadecimal"):
+        repository.save_run(
+            make_run(batch, rules_fingerprint=rules_fingerprint),
+            batch.detailed,
+        )
+
+    assert repository.count_runs() == 0
 
 
 def test_service_generates_unique_uuid_runs_and_newest_first_history(

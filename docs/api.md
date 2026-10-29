@@ -46,6 +46,7 @@ Example `201 Created` response:
   "created_at": "2026-08-16T20:15:30.123456Z",
   "source": "portfolio-sample",
   "rules_version": "1.0.0",
+  "rules_fingerprint": "979c7f432e0e5f54ef4e93f8f5b8bd0f85db2bfd268e38fa80c98ee1533619d6",
   "appointment_count": 1,
   "documentation_count": 0,
   "result_count": 1,
@@ -55,8 +56,13 @@ Example `201 Created` response:
 }
 ```
 
-The response is intentionally summary-only. Automation can branch on
-`exception_count` and fetch the exception collection only when needed.
+The response is intentionally summary-only. `rules_version` is the readable
+label supplied by the configuration file. `rules_fingerprint` is the SHA-256
+fingerprint of the validated, normalized effective configuration, including the
+version label, scalar settings, and normalized status groups. Automation can
+record it with the run ID to establish which exact effective rules produced a
+result, then branch on `exception_count` and fetch the exception collection only
+when needed.
 
 ## Retry-safe creation with `Idempotency-Key`
 
@@ -89,10 +95,12 @@ array order remains meaningful because it controls stable result order. The key
 and fingerprint are stored only with a completed run. Validation, configuration,
 or rolled-back persistence failures do not reserve the key.
 
-SQLite schema version 2 enforces key uniqueness with a partial unique index. A
+SQLite schema version 3 enforces key uniqueness with a partial unique index. A
 keyed write checks and inserts within one transaction, so simultaneous retries
-cannot create two runs. Existing schema-version-1 databases migrate in place;
-their earlier unkeyed rows remain valid with null idempotency fields.
+cannot create two runs. Existing schema-version-1 and version-2 databases
+migrate in place. Earlier runs receive a null `rules_fingerprint` because their
+actual effective configuration was not stored and cannot be reconstructed
+reliably; every new completed run stores a 64-character SHA-256 value.
 
 ## Read endpoints
 

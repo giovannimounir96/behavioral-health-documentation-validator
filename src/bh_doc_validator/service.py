@@ -29,6 +29,7 @@ class ValidationBatch:
     exception_count: int
     review_count: int
     rules_version: str
+    rules_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ def validate_batch(
         exception_count=len(exceptions),
         review_count=int(detailed["requires_review"].sum()),
         rules_version=config.rules_version,
+        rules_fingerprint=config.rules_fingerprint,
     )
 
 
@@ -122,6 +124,7 @@ def _new_run(batch: ValidationBatch, *, source: str) -> RunRecord:
         created_at=_utc_now(),
         source=source,
         rules_version=batch.rules_version,
+        rules_fingerprint=batch.rules_fingerprint,
         appointment_count=batch.appointment_count,
         documentation_count=batch.documentation_count,
         result_count=batch.result_count,

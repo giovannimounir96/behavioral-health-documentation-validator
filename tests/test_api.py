@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from bh_doc_validator.api import create_app
+from bh_doc_validator.config import ValidationConfig
 from bh_doc_validator.exceptions import PersistenceError
 from bh_doc_validator.persistence import SQLiteRunRepository
 
@@ -109,6 +110,9 @@ def test_post_sample_persists_run_results_and_exceptions(
         "created_at": created["created_at"],
         "source": "pytest",
         "rules_version": "1.0.0",
+        "rules_fingerprint": ValidationConfig.from_file(
+            api_client.app.state.service.config_path
+        ).rules_fingerprint,
         "appointment_count": 12,
         "documentation_count": 9,
         "result_count": 13,
@@ -147,6 +151,7 @@ def test_two_api_runs_have_unique_ids_and_paginated_history(
     assert body["limit"] == 1
     assert len(body["items"]) == 1
     assert body["items"][0]["run_id"] == second["run_id"]
+    assert body["items"][0]["rules_fingerprint"] == second["rules_fingerprint"]
 
 
 def test_same_idempotency_key_and_request_replays_completed_run(

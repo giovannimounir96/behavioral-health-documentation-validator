@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,38 @@ class ValidationConfig:
 
     def note_group(self, status: str) -> str | None:
         return _find_group(status, self.note_status_groups)
+
+    def canonical_dict(self) -> dict[str, Any]:
+        """Return the normalized rule settings in a stable JSON-ready shape."""
+
+        return {
+            "rules_version": self.rules_version,
+            "date_tolerance_days": self.date_tolerance_days,
+            "no_show_policy": self.no_show_policy,
+            "require_signed_date_for_signed_notes": (
+                self.require_signed_date_for_signed_notes
+            ),
+            "appointment_status_groups": {
+                group_name: sorted(self.appointment_status_groups[group_name])
+                for group_name in sorted(self.appointment_status_groups)
+            },
+            "note_status_groups": {
+                group_name: sorted(self.note_status_groups[group_name])
+                for group_name in sorted(self.note_status_groups)
+            },
+        }
+
+    @property
+    def rules_fingerprint(self) -> str:
+        """SHA-256 of the effective normalized rules configuration."""
+
+        canonical_json = json.dumps(
+            self.canonical_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 def _normalize_groups(
